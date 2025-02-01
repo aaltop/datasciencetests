@@ -1,7 +1,9 @@
 /*
+*.pyc
 
 !main.ipynb
 !.gitignore
 !pdm.lock
 !pyproject.toml
 !README.md
+!src
