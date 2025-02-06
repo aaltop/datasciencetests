@@ -48,7 +48,8 @@ def default_boxes(scale, centers, ratios:list[float] | None = None) -> torch.Ten
 
     `centers`: as per `default_box_centers()`.
 
-    `ratios`: ratios of the boxes' widths and heights.
+    `ratios`: ratios of the boxes' widths and heights. Defaults to
+    [1, 2, 3, 1/2, 1/3]
     '''
 
     if ratios is None:
