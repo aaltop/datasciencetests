@@ -20,18 +20,19 @@ def scales(num_layers, s_min = 0.2, s_max = 0.9) -> list[float]:
         for k in range(1, m + 1)
     ]
 
-def default_box_centers(width, height) -> torch.Tensor:
+def default_box_centers(width, height, width_step = 1, height_step = 1) -> torch.Tensor:
     '''
-    Calculate the centers of each pixel in a `width`-by-`height`
-    image, used as the centers of the default boxes.
+    Calculate the centers of each of `width_step`-th pixel on a row every
+    `height_step`-th row for a `width`-by-`height` image, used as the centers
+    of the default boxes.
 
     Return center values normalised by the width and height (i.e. restricted to
     [0,1]). For return `ret`, `ret[i]` is the center of the i-th pixel
     when iterating over all pixels row-wise (left-to-right, top-to-bottom).
     '''
 
-    x_pixels = (torch.arange(start = 0, end = width)+0.5)/width
-    y_pixels = (torch.arange(start = 0, end = height)+0.5)/height
+    x_pixels = (torch.arange(start = 0, end = width, step = width_step)+0.5)/width
+    y_pixels = (torch.arange(start = 0, end = height, step = height_step)+0.5)/height
 
     x, y = torch.meshgrid(x_pixels, y_pixels, indexing = "xy")
     return torch.vstack([x.flatten(), y.flatten()]).T
