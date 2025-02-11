@@ -42,8 +42,7 @@ def default_boxes(scale, centers, ratios:list[float] | None = None) -> torch.Ten
     Calculate the default boxes as (x_min, y_min, x_max, y_max).
     
     Return tensor with first index iterating over pixels,
-    second index iterating over the box values, and third over
-    the ratios in order.
+    second over the ratios in order, and third over the box values.
 
     `scale`: Scales of the boxes, (0,1].
 
@@ -79,7 +78,7 @@ def default_boxes(scale, centers, ratios:list[float] | None = None) -> torch.Ten
 
     # rows have pixels, each group of four columns has one box definition
     boxes = x_and_y + offsets.repeat(len(x_and_y),1)
-    # first index pixels, second boxes for pixel, third specific ratio box
+    # first index pixels, second specific ratio box, third boxes for pixel
     boxes = boxes.reshape([-1, len(ratios), 4])
 
     return boxes
