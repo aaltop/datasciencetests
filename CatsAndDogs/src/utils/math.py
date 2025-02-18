@@ -136,81 +136,89 @@ def intersection(bb1: torch.Tensor, bb2: torch.Tensor) -> torch.Tensor:
     # how many of the corners are within the other box
     corners_in = corners.sum(dim=0)
 
-
+    all_corner = corners_in > 2
+    two_corner = corners_in == 2
+    one_corner = corners_in == 1
     areas = torch.zeros([len(bb1), len(bb2)], dtype=bb1.dtype)
+    # all corners
+    # -----------
+    areas[all_corner.T] = bounding_box_area(bb2).repeat((len(bb1), 1))[all_corner.T]
 
-    for i, box_corners in enumerate(corners_in):
+    # two corners
+    # -----------
 
-        box = bb2[i]
-        included = corners[:,i,:]
+    def logical_and(*tensors):
 
-        all_corner = box_corners > 2
-        two_corner = box_corners == 2
-        one_corner = box_corners == 1
+        result = tensors[0]
+        for tens in tensors[1:]:
+            result = torch.logical_and(result, tens)
 
-        # all corners
-        # -----------
-        if torch.any(all_corner):
-            areas[all_corner, i] = bounding_box_area(box)
-
-
-        # two corners
-        # -----------
-
-        def logical_and(*tensors):
-
-            result = tensors[0]
-            for tens in tensors[1:]:
-                result = torch.logical_and(result, tens)
-
-            return result
+        return result
+    
+    bb2_xmin, bb2_ymin, bb2_xmax, bb2_ymax = (
+        bb2[:,0],
+        bb2[:,1],
+        bb2[:,2],
+        bb2[:,3]
+    )
+    bb2_widths = bb2_xmax - bb2_xmin
+    bb2_heights = bb2_ymax - bb2_ymin
         
-        if torch.any(two_corner):
-            # the top side is within the box
-            top = logical_and(included[0,:], included[1,:], two_corner)
-            if torch.any(top):
-                # width times height
-                areas[top, i] = (box[2] - box[0])*(bb1[top,-1] - box[1])
+    if torch.any(two_corner):
+        # the top side is within the box
+        top = logical_and(corners[0,:,:], corners[1,:,:], two_corner).T
+        if torch.any(top):
+            # width times height
+            areas[top] = (bb2_widths*(bb1[:,-1].reshape((-1,1)) - bb2_ymin))[top]
 
-            right = logical_and(included[1,:], included[2,:], two_corner)
-            if torch.any(right):
-                areas[right, i] = (box[2] - bb1[right,0])*(box[-1] - box[1])
+        right = logical_and(corners[1,:,:], corners[2,:,:], two_corner).T
+        if torch.any(right):
+            areas[right] = ((bb2_xmax - bb1[:,0].reshape((-1,1)))*bb2_heights)[right]
 
-            bottom = logical_and(included[2,:], included[3,:], two_corner)
-            if torch.any(bottom):
-                areas[bottom, i] = (box[2] - box[0])*(box[-1] - bb1[bottom, 1])
+        bottom = logical_and(corners[2,:,:], corners[3,:,:], two_corner).T
+        if torch.any(bottom):
+            areas[bottom] = (bb2_widths*(bb2_ymax - bb1[:, 1].reshape((-1,1))))[bottom]
 
-            left = logical_and(included[3,:], included[0,:], two_corner)
-            if torch.any(left):
-                areas[left, i] = (bb1[left,2] - box[0])*(box[-1] - box[1])
+        left = logical_and(corners[3,:,:], corners[0,:,:], two_corner).T
+        if torch.any(left):
+            areas[left] = ((bb1[:,2].reshape((-1,1)) - bb2_xmin)*bb2_heights)[left]
+
+    # one corner
+    # ----------
+
+    if torch.any(one_corner):
+        # top left corner is inside the box
+        tl = logical_and(corners[0,:,:], one_corner).T
+        if torch.any(tl):
+            # width times height
+            areas[tl] = (
+                (bb1[:,2].reshape((-1,1)) - bb2_xmin)
+                *(bb1[:,-1].reshape((-1,1)) - bb2_ymin)
+            )[tl]
         
-        
-        # one corner
-        # ----------
+        tr = logical_and(corners[1,:,:], one_corner).T
+        if torch.any(tr):
+            areas[tr] = (
+                (bb2_xmax - bb1[:,0].reshape((-1,1)))
+                *(bb1[:,-1].reshape((-1,1)) - bb2_ymin)
+            )[tr]
 
-        if torch.any(one_corner):
-            # top left corner is inside the box
-            tl = logical_and(included[0,:], one_corner)
-            if torch.any(tl):
-                # width times height
-                areas[tl, i] = (bb1[tl,2] - box[0])*(bb1[tl,-1] - box[1])
-            
-            tr = logical_and(included[1,:], one_corner)
-            if torch.any(tr):
-                areas[tr,i] = (box[2] - bb1[tr,0])*(bb1[tr,-1] - box[1])
+        br = logical_and(corners[2,:,:], one_corner).T
+        if torch.any(br):
+            areas[br] = (
+                (bb2_xmax - bb1[:,0].reshape((-1,1)))
+                *(bb2_ymax - bb1[:,1].reshape((-1,1)))
+            )[br]
 
-            br = logical_and(included[2,:], one_corner)
-            if torch.any(br):
-                areas[br,i] = (box[2] - bb1[br,0])*(box[-1] - bb1[br,1])
-
-            bl = logical_and(included[3,:], one_corner)
-            if torch.any(bl):
-                areas[bl,i] = (bb1[bl,2] - box[0])*(box[-1] - bb1[bl,1])
-
+        bl = logical_and(corners[3,:,:], one_corner).T
+        if torch.any(bl):
+            areas[bl] = (
+                (bb1[:,2].reshape((-1,1)) - bb2_xmin)
+                *(bb2_ymax - bb1[:,1].reshape((-1,1)))
+            )[bl]
+    
 
     return areas.T
-
-
 
 def symmetric_intersection(bb1: torch.Tensor, bb2: torch.Tensor) -> torch.Tensor:
     '''
@@ -233,7 +241,7 @@ def symmetric_intersection(bb1: torch.Tensor, bb2: torch.Tensor) -> torch.Tensor
 
 
 
-def intersection_over_union(bb1: torch.Tensor, bb2: torch.Tensor) -> torch.Tensor:
+def intersection_over_union(bb1: torch.Tensor, bb2: torch.Tensor, dtype = torch.float32) -> torch.Tensor:
     '''
     Calculate the intersection-over-union AKA Jaccard index of
     the bounding boxes `bb1` (N,4), and `bb2`, (M,4). The format of a bounding
@@ -242,7 +250,7 @@ def intersection_over_union(bb1: torch.Tensor, bb2: torch.Tensor) -> torch.Tenso
     Return the values as (M,N).
     '''
 
-    intersections = symmetric_intersection(bb1, bb2)
+    intersections = symmetric_intersection(bb1.to(dtype), bb2.to(dtype))
 
     bb1_areas = bounding_box_area(bb1)
     bb2_areas = bounding_box_area(bb2).reshape([-1,1])
