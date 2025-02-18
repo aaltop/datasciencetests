@@ -5,7 +5,7 @@ description = "Default template for PDM package"
 authors = [
     {name = "TA", email = "aaltopi@gmail.com"},
 ]
-dependencies = ["ipykernel>=6.29.5", "torch>=2.5.1", "torchvision>=0.20.1", "matplotlib>=3.10.0"]
+dependencies = ["ipykernel>=6.29.5", "matplotlib>=3.10.0", "torch>=2.6.0", "torchvision>=0.21.0"]
 requires-python = "==3.12.*"
 readme = "README.md"
 license = {text = "MIT"}
@@ -13,3 +13,9 @@ license = {text = "MIT"}
 
 [tool.pdm]
 distribution = false
+
+
+[[tool.pdm.source]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu126"
+include_packages = ["torch", "torchvision"]
