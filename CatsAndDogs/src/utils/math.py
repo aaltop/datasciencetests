@@ -268,5 +268,5 @@ def batched_intersection_over_union(bb1: torch.Tensor, bbs2: list[torch.Tensor],
     '''
 
     result = intersection_over_union(bb1, torch.vstack(bbs2), dtype = dtype)
-    idx = [0]+list(itertools.accumulate(map(len, bbs2)))[:-1]
+    idx = [0]+list(itertools.accumulate(map(len, bbs2)))
     return [result[start:end] for start,end in zip(idx[:-1], idx[1:])]
