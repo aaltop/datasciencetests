@@ -1,5 +1,7 @@
 import torch
 
+import itertools
+
 def bounding_box_corners(bb: torch.Tensor) -> torch.Tensor:
     '''
     Given the bounding box `bb` (xmin, ymin, xmax, ymax), return
@@ -258,3 +260,13 @@ def intersection_over_union(bb1: torch.Tensor, bb2: torch.Tensor, dtype = torch.
 
     return intersections/(areas_sum - intersections)
     
+def batched_intersection_over_union(bb1: torch.Tensor, bbs2: list[torch.Tensor], dtype = torch.float32) -> list[torch.Tensor]:
+    '''
+    See `intersection_over_union()` for non-batched version. For bounding boxes
+    per patch in `bbs2`, return a matching list of IoU values against
+    `bb1`.
+    '''
+
+    result = intersection_over_union(bb1, torch.vstack(bbs2), dtype = dtype)
+    idx = [0]+list(itertools.accumulate(map(len, bbs2)))[:-1]
+    return [result[start:end] for start,end in zip(idx[:-1], idx[1:])]
