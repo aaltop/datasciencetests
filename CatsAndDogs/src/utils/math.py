@@ -243,7 +243,7 @@ def symmetric_intersection(bb1: torch.Tensor, bb2: torch.Tensor) -> torch.Tensor
 
 
 
-def intersection_over_union(bb1: torch.Tensor, bb2: torch.Tensor, dtype = torch.float32) -> torch.Tensor:
+def intersection_over_union(bb1: torch.Tensor, bb2: torch.Tensor) -> torch.Tensor:
     '''
     Calculate the intersection-over-union AKA Jaccard index of
     the bounding boxes `bb1` (N,4), and `bb2`, (M,4). The format of a bounding
@@ -252,7 +252,10 @@ def intersection_over_union(bb1: torch.Tensor, bb2: torch.Tensor, dtype = torch.
     Return the values as (M,N).
     '''
 
-    intersections = symmetric_intersection(bb1.to(dtype), bb2.to(dtype))
+    intersections = symmetric_intersection(
+        bb1,
+        bb2
+    )
 
     bb1_areas = bounding_box_area(bb1)
     bb2_areas = bounding_box_area(bb2).reshape([-1,1])
@@ -260,13 +263,13 @@ def intersection_over_union(bb1: torch.Tensor, bb2: torch.Tensor, dtype = torch.
 
     return intersections/(areas_sum - intersections)
     
-def batched_intersection_over_union(bb1: torch.Tensor, bbs2: list[torch.Tensor], dtype = torch.float32) -> list[torch.Tensor]:
+def batched_intersection_over_union(bb1: torch.Tensor, bbs2: list[torch.Tensor]) -> list[torch.Tensor]:
     '''
     See `intersection_over_union()` for non-batched version. For bounding boxes
     per patch in `bbs2`, return a matching list of IoU values against
     `bb1`.
     '''
 
-    result = intersection_over_union(bb1, torch.vstack(bbs2), dtype = dtype)
+    result = intersection_over_union(bb1, torch.vstack(bbs2))
     idx = [0]+list(itertools.accumulate(map(len, bbs2)))
     return [result[start:end] for start,end in zip(idx[:-1], idx[1:])]
