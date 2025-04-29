@@ -1,0 +1,38 @@
+# ignore all top-level stuff, also anything everywhere beginning with
+# a dot
+/*
+.*
+
+__pycache__
+
+
+# include back on the top-level
+# -----------------------------
+
+# directories
+# -----------
+!src
+# ===========
+
+# files
+# ------------
+
+!.gitignore
+!main.py
+!README.md
+
+# project
+!pyproject.toml
+!uv.lock
+
+# notebooks
+!baseline_analysis.ipynb
+!prepare_context_counts.ipynb
+!neural_analysis.ipynb
+
+# ============
+
+
+
+
+# ==============================

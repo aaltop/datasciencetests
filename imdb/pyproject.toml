@@ -1,0 +1,28 @@
+[project]
+name = "SentimentAnalysis"
+version = "0.1.0"
+description = "Simple sentiment analysis."
+authors = [
+    {name = "TA", email = "aaltopi@gmail.com"},
+]
+dependencies = [
+    "nltk>=3.8.1",
+    "ipython>=8.26.0",
+    "ipykernel>=6.29.5",
+    "pandas>=2.2.2",
+    "pytest>=8.2.2",
+    "torch>=2.4.0",
+    "numpy>=2.2.4",
+    "matplotlib>=3.10.1",
+]
+requires-python = "==3.13.*"
+readme = "README.md"
+license = {text = "MIT"}
+
+
+[tool.pdm]
+distribution = false
+
+
+[tool.pdm.scripts]
+_.env_file = ".env"
