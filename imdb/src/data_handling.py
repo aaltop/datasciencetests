@@ -92,8 +92,10 @@ def test_data_to_numeric(
         num_words = [1 if train_word in words else 0 for train_word in train_words]
         return [context] + num_words
 
+    cols = ["__context__"] + list(train_words)
+    assert len(cols) == len(set(cols))
     df = pd.DataFrame(
-        columns=["context"] + list(train_words),
+        columns=cols,
         data=map(to_numeric, test_context, test_words),
     )
     with open(numeric_test_data_path, "wb") as f:
