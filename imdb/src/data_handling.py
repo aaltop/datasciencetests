@@ -74,13 +74,15 @@ def test_data_to_numeric(
     Create a table from the test data as written by `process_test_data()`
     written to `numeric_test_data_path`. This table allows easy computation
     of predicted context (based on train data) against the actual context.
-    The format is
+    The format is (as parquet)
 
-    - Pre-header of {context_word_id},{context_word} pairs
-    - CSV header of the words in `train_words`
-    - The data, of {context_word_id},{...word_indices}
+    - columns of "__context__" (for the context the words appear in), and the words in `train_words`
         - {word_indices} the indices of words in `train_words` that
         appeared in the given test data point's words.
+
+    Arguments:
+        test_words:
+            Each item is words delimited by spaces.
     """
 
     numeric_test_data_path = Path(numeric_test_data_path)
@@ -88,15 +90,23 @@ def test_data_to_numeric(
     # take a context (e.g. positive vs. negative) and
     # the associated words, return context and a boolean for each word
     # for whether it was found in the train data
-    def to_numeric(context, words):
-        num_words = [1 if train_word in words else 0 for train_word in train_words]
-        return [context] + num_words
+    def to_numeric(words):
+        uniq = set(words.split())
+        num_words = [1 if train_word in uniq else 0 for train_word in train_words]
+        return num_words
 
     cols = ["__context__"] + list(train_words)
     assert len(cols) == len(set(cols))
-    df = pd.DataFrame(
-        columns=cols,
-        data=map(to_numeric, test_context, test_words),
+
+    df1 = pd.DataFrame()
+    df1["__context__"] = test_context
+    
+    df2 = pd.DataFrame(
+        columns=train_words,
+        data=map(to_numeric, test_words),
     )
+
+    df = df1.join(df2)
+
     with open(numeric_test_data_path, "wb") as f:
         df.to_parquet(path=f)
