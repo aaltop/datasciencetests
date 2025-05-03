@@ -12,6 +12,7 @@ __pycache__
 # directories
 # -----------
 !src
+!scripts
 # ===========
 
 # files
@@ -20,6 +21,7 @@ __pycache__
 !.gitignore
 !main.py
 !README.md
+!.env
 
 # project
 !pyproject.toml
