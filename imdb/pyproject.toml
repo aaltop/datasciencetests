@@ -16,6 +16,8 @@ dependencies = [
     "matplotlib>=3.10.1",
     "mlflow>=2.22.0",
     "python-dotenv>=1.1.0",
+    "tensorboard>=2.19.0",
+    "standard-imghdr>=3.13.0",
 ]
 requires-python = "==3.13.*"
 readme = "README.md"
