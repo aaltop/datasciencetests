@@ -18,6 +18,7 @@ dependencies = [
     "python-dotenv>=1.1.0",
     "tensorboard>=2.19.0",
     "standard-imghdr>=3.13.0",
+    "ipympl>=0.9.7",
 ]
 requires-python = "==3.13.*"
 readme = "README.md"

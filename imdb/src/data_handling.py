@@ -19,7 +19,7 @@ def process_training_data(
     """
     Process the raw training data of `words` and `context` and write the result to
     `train_data_path`. `context` should include one value for each
-    set of words in `words`, so matching indices.
+    string of words in `words`, so matching indices.
     """
 
     # get and process the given words
@@ -64,21 +64,22 @@ def process_test_data(
             print(line, file=f)
 
 
-def test_data_to_numeric(
+def test_data_to_numeric_full(
     test_context: Iterable[str],
     test_words: Iterable[str],
     train_words: Iterable[str],
     numeric_test_data_path: str,
 ):
     """
-    Create a table from the test data as written by `process_test_data()`
-    written to `numeric_test_data_path`. This table allows easy computation
+    Create a table from the test data as created by `process_test_data()`
+    and write it to `numeric_test_data_path`. This table allows easy computation
     of predicted context (based on train data) against the actual context.
     The format is (as parquet)
 
     - columns of "__context__" (for the context the words appear in), and the words in `train_words`
-        - {word_indices} the indices of words in `train_words` that
-        appeared in the given test data point's words.
+        - "__context__" associates the data point with a given context
+        - each of the columns after "__context__" contain a boolean (0 or 1)
+        for whether the column's word found in the data.
 
     Arguments:
         test_words:
@@ -110,3 +111,105 @@ def test_data_to_numeric(
 
     with open(numeric_test_data_path, "wb") as f:
         df.to_parquet(path=f)
+
+def train_words_dict(train_words: Iterable[str]):
+
+    return {"<unk>": 0} | {train_word: i+1 for i, train_word in enumerate(train_words)}
+
+class SparseNumericTestData:
+    '''
+    Attributes:
+        train_words_dict:
+            dictionary of index, word -pairs, where the words are
+            words seen during training (and the extra catch-all "\<unk\>" word).
+            The indices match those in `context_and_indices`.
+        context_and_indices:
+            list of tuples of (context, indices) data point pairs, where `context` is
+            a string denoting the context (e.g. positive, negative) of the data point,
+            and `indices` is a list of indices that map to words using
+            `train_words_dict`.
+    '''
+
+    def __init__(self, train_words: Iterable[str], context_and_indices: list[tuple[str, list[int]]]):
+
+        self.train_words_dict = {key: value for key, value in enumerate(train_words)}
+        self.context_and_indices = context_and_indices
+
+    def indices_to_words(self, indices: Iterable[int]):
+        return [self.train_words_dict[i] for i in indices]
+    
+    @property
+    def context_and_words(self):
+        return [(context, self.indices_to_words(indices)) for context, indices in self.context_and_indices]
+    
+    def __getitem__(self, idx):
+        return self.context_and_indices[idx]
+
+class SparseNumericTestDataIO:
+    '''
+    Writes and reads test data in a sparse numeric format.
+    '''
+
+    def __init__(
+        self,
+        test_context: Iterable[str],
+        test_words: Iterable[str],
+        train_words: Iterable[str],
+    ):
+        '''
+        Arguments:
+            test_words:
+                Each item is words delimited by spaces.
+        '''
+        self.test_context = test_context
+        self.test_words = test_words
+        self.train_words_dict = train_words_dict(train_words)
+
+    def to_indices(self, words: Iterable[str]):
+        return [str(self.train_words_dict.get(word, 0)) for word in words]
+    
+    def row(self, context, words: Iterable[str]):
+        return context + " " + " ".join(self.to_indices(words)) + "\n"
+
+    def write(self, path: Path):
+        """
+        Indexise the test data as created by `process_test_data()`
+        and write it to `path`. The format is the following:
+
+        ```
+        *train words*
+        ==data==
+        *data*
+        ```
+
+        Before the data itself, the used train words are printed
+        in the order they appear in `self.train_words_dict`. The header '==data==' indicates
+        the start of the data part. The data is written
+        as rows of data points. Each row consists of a context word and
+        a number of indices, all delimited by spaces. The indices correspond
+        to words in `self.train_words_dict`, where a word found in `self.test_words` is matched
+        with the same word's index in `self.train_words_dict`.
+        """
+
+        with open(path, "w", encoding="utf-8") as f:
+            print(*self.train_words_dict.keys(), sep="\n", file=f)
+            print("==data==", file=f)
+            for context, words in zip(self.test_context, self.test_words):
+                f.write(self.row(context, words.split()))
+
+    @staticmethod
+    def read(path: Path) -> SparseNumericTestData:
+        '''
+        Read the data as written by `self.write()`.
+        '''
+
+        training_words = []
+        context_and_indices = []
+        with open(path, "r", encoding="utf-8") as f:
+            while (row := f.readline().strip()) != "==data==":
+                training_words.append(row)
+            while (row := f.readline().strip()) != "":
+                context, *idx = row.split()
+                context_and_indices.append((context, list(map(int, idx))))
+        
+        return SparseNumericTestData(training_words, context_and_indices)
