@@ -138,15 +138,15 @@ class SparseNumericTestData:
     def indices_to_words(self, indices: Iterable[int]):
         return [self.train_words_dict[i] for i in indices]
     
-    def indices_to_bool(self, indices):
+    def indices_to_weight(self, indices: Iterable[int]):
         '''
-        Create a list of length `len(self.train_words_dict)` where indices
-        that are in `indices` are set to 1 and all other indices are set
-        to zero.
+        Create a list `x` of length `len(self.train_words_dict)` where,
+        for each element `i` in `indices`, `x[i]` is equal to the number of
+        times that `i` is in `indices`.
         '''
         ret = [0]*len(self.train_words_dict)
-        for idx in set(indices):
-            ret[idx] = 1
+        for idx in indices:
+            ret[idx] += 1
         return ret
     
     @property
