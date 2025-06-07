@@ -149,6 +149,9 @@ class SparseNumericTestData:
             ret[idx] += 1
         return ret
     
+    def sentence_lengths(self):
+        return [len(indices) for _, indices in self.context_and_indices]
+
     @property
     def context_and_words(self):
         return [(context, self.indices_to_words(indices)) for context, indices in self.context_and_indices]
@@ -163,6 +166,62 @@ class SparseNumericTestData:
     
     def __len__(self):
         return len(self.context_and_indices)
+    
+class StandardLengthTestData(SparseNumericTestData):
+    '''
+    Like SparseNumericTestData but extends or cuts off the sentences
+    of words to a standard length, adding a dummy token index where
+    where an input sentence is shorter than the set sentence length.
+    '''
+
+    def __init__(self, sentence_length: int|float = 1.0, **kwargs):
+        '''
+        Arguments:
+            sentence_length:
+                If integer, set as sentence_length. if float, should be
+                greater than zero, specifying a percentile of given
+                sentences' lengths to use (resolution of one percent); if greater than or equal to one, take the max
+                sentence length and multiply by `sentence_length`.
+        '''
+        super(self.__class__, self).__init__(**kwargs)
+
+        if isinstance(sentence_length, float):
+            if sentence_length >= 1.0:
+                sentence_length = int(max(self.sentence_lengths())*sentence_length)
+            else:
+                # somewhat unnecessary to pandas, but irrelevant right now
+                sentence_length = round(sentence_length, 2)
+                sentence_length = int(pd.Series(self.sentence_lengths()).describe([sentence_length])[f"{sentence_length:.0%}"])
+
+        self.sentence_length = sentence_length
+        # add a dummy token which will be used to extend the length
+        # of any "sentence" to the full length
+        self.train_words_dict = {index+1: word for index, word in self.train_words_dict.items()}
+        self.train_words_dict = {0: "<dum>"} | self.train_words_dict
+
+        # extend or cut off the indices to a standard length
+        # --------------------------------------------------
+        new_context_and_indices = [None]*len(self.context_and_indices)
+        dummy_index = 0
+        for i, (context, indices) in enumerate(self.context_and_indices):
+            new_indices = [None]*self.sentence_length
+            # add one to each index to account for dummy index
+            indices = [idx+1 for idx in indices]
+            if len(indices) >= self.sentence_length: # cut off
+                new_indices = indices[:len(new_indices)]
+            else: # add dummy token to end
+                new_indices[:len(indices)] = indices
+                new_indices[len(indices):] = [dummy_index]*(self.sentence_length-len(indices))
+            new_context_and_indices[i] = (context, new_indices)
+        
+        self.context_and_indices = new_context_and_indices
+        # ====================================================
+
+    @classmethod
+    def from_sparse(cls, sntd: SparseNumericTestData, sentence_length: int|float = 1.00):
+        words = sntd.train_words_dict.values()
+        return cls(sentence_length=sentence_length, train_words=words, context_and_indices=sntd.context_and_indices)
+
 
 class SparseNumericTestDataIO:
     '''
