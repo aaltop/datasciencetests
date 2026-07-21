@@ -1,8 +1,12 @@
 from io import TextIOBase
+import itertools
 import json
 from pathlib import Path
+import time
 from typing import TypedDict
 import xml.etree.ElementTree as ET
+
+from src.ansi import ANSI
 
 
 class FileSystem:
@@ -50,7 +54,7 @@ class RawPage(TypedDict):
 class PagesParser:
     tag_prefix = "{http://www.mediawiki.org/xml/export-0.11/}"
 
-    def find_next_page(
+    def _find_next_page(
         self, f: TextIOBase, parser: ET.XMLPullParser, last_read_line: int
     ):
 
@@ -81,18 +85,32 @@ class PagesParser:
                 # give it the namespace info when it's not reading from the start
                 # if we don't do this, it won't find the tags (when beginning reading
                 # from somewhere in the middle) as it doesn't know
-                # what the namespace is supposed to be
+                # what the namespace is supposed to be (basically, using the tag_prefix
+                # isn't going to work if this isn't done)
                 parser.feed(f.readline())
         pages_to_find = num
         pages_found = 0
         pages: list[RawPage] = []
+        clear_move_to_start = ANSI().erase_in_line("entire_line").cursor_to_column()
+        start = time.time()
         with open(fs.wiki_xml) as f:
             navigate_to_line(f, current_line + 1)
             while pages_found < pages_to_find:
-                page = self.find_next_page(f, parser, current_line)
+                page = self._find_next_page(f, parser, current_line)
                 if page is None:
                     break
                 pages_found += 1
+                if pages_found % 1000 == 0:
+                    print(
+                        "{0}Current line: {1} page count: {2} elapsed time (s): {3}".format(
+                            str(clear_move_to_start),
+                            page["end_line"],
+                            pages_found,
+                            time.time() - start,
+                        ),
+                        end="",
+                        flush=True,
+                    )
                 current_line = page["end_line"]
                 pages.append(page)
 
@@ -113,36 +131,6 @@ class PagesParser:
         return title, details
 
 
-# def find_pages():
-
-#     tag_prefix = "{http://www.mediawiki.org/xml/export-0.11/}"
-
-#     parser = ET.XMLPullParser(["start", "end"])
-#     last_read_line = get_last_read_line()
-#     with open(fs.wiki_xml) as f:
-#         current_line = 0
-#         page_elem: ET.Element | None = None
-#         pages_to_find = 10
-#         pages_found = 0
-#         # start, stop line, the element itself
-#         pages: list[list[int, int, ET.Element]] = []
-#         while pages_found < pages_to_find:
-#             line = f.readline()
-#             if line == "":
-#                 break
-#             current_line += 1
-#             parser.feed(line)
-#             for event, elem in parser.read_events():
-#                 if elem.tag == tag_prefix + "page":
-#                     if event == "start":
-#                         pages.append([])
-#                         pages[-1].append(current_line)
-#                     if event == "end":
-#                         pages[-1].append(current_line)
-#                         pages[-1].append(elem)
-#                         pages_found += 1
-
-
 def get_last_read_line():
 
     file = fs.data_dir / "last_read_line.txt"
@@ -153,68 +141,29 @@ def get_last_read_line():
 
 def main():
 
-    # tag_prefix = "{http://www.mediawiki.org/xml/export-0.11/}"
-
-    # parser = ET.XMLPullParser(["start", "end"])
-    # last_read_line = get_last_read_line()
-    # with open(fs.wiki_xml) as f:
-    #     current_line = 0
-    #     page_elem: ET.Element | None = None
-    #     pages_to_find = 10
-    #     pages_found = 0
-    #     # start, stop line, the element itself
-    #     pages: list[list[int, int, ET.Element]] = []
-    #     while pages_found < pages_to_find:
-    #         line = f.readline()
-    #         if line == "":
-    #             break
-    #         current_line += 1
-    #         parser.feed(line)
-    #         for event, elem in parser.read_events():
-    #             if elem.tag == tag_prefix + "page":
-    #                 if event == "start":
-    #                     pages.append([])
-    #                     pages[-1].append(current_line)
-    #                 if event == "end":
-    #                     pages[-1].append(current_line)
-    #                     pages[-1].append(elem)
-    #                     pages_found += 1
-
-    # pages_dicts: dict[str, PageDetails] = dict()
-    # last_read_line = 0
-    # for start_line, end_line, page_elem in pages:
-    #     last_read_line = end_line
-    #     print(f"{start_line=}, {end_line=}")
-    #     tags = "title", "text"
-    #     if page_elem is not None:
-    #         tags_and_elems = {
-    #             tag: page_elem.findall(f".//{tag_prefix}{tag}") for tag in tags
-    #         }
-
-    #         title = tags_and_elems["title"][0].text
-    #         page_text = tags_and_elems["text"][0].text
-    #         details = PageDetails(
-    #             start_line=start_line, end_line=end_line, text=page_text
-    #         )
-    #         pages_dicts[title] = details
-
     parser = PagesParser()
 
-    pages = parser.find_pages(3, True)
+    pages = parser.find_pages(100000, False)
     last_read_line = pages[-1][-1]["end_line"]
-    pages_dicts = dict(pages)
 
     with open(fs.data_dir / "last_read_line.txt", mode="w") as f:
         f.write(str(last_read_line))
 
-    with open(fs.data_dir / "parsed_pages.json", "w") as f:
-        json.dump(pages_dicts, f, indent=2)
+    for batch in itertools.batched(pages, 10000):
+        pages_dicts = dict(batch)
+        batch_first_read_line = batch[0][-1]["start_line"]
+        batch_last_read_line = batch[-1][-1]["end_line"]
+
+        file_name = "parsed_pages_{0}_{1}.json".format(
+            batch_first_read_line, batch_last_read_line
+        )
+
+        with open(
+            fs.data_dir / file_name,
+            "w",
+        ) as f:
+            json.dump(pages_dicts, f, indent=2)
 
 
 if __name__ == "__main__":
     main()
-
-    # with open(fs.wiki_xml, "r") as f:
-    #     navigate_to_line(f, 562 + 106)
-    #     for i in range(3):
-    #         print(f.readline(), end="")
