@@ -1,0 +1,27 @@
+/*
+.*
+
+# INCLUDE BACK
+# ------------
+
+# DIRECTORIES
+# ------------
+
+# DIRECTORIES
+# ============
+
+# FILES
+# ------------
+
+!.gitignore
+
+!main.py
+
+!pyproject.toml
+!uv.lock
+
+# FILES
+# ============
+
+# INCLUDE BACK
+# ============
