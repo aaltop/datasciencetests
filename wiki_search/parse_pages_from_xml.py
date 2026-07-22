@@ -82,6 +82,7 @@ class PagesParser:
         batch_size: int = None,
         xml_file: Path = None,
         forbidden_title_content: list[str] = None,
+        forbidden_text_content: list[str] = None,
     ):
         """
         Arguments:
@@ -97,6 +98,10 @@ class PagesParser:
                 of pages, e.g. ['Conversation:'] to not include any pages
                 that have 'Conversation:' in the title. Set to None to
                 allow all titles. Can be in regex syntax.
+
+            forbidden_text_content:
+                Partial strings that should not be present in the beginning
+                of the textual body of a page. Set to None to allow all.
         """
 
         self._batch_size = batch_size or 10_000
@@ -106,10 +111,22 @@ class PagesParser:
         if not self._all_title_valid:
             self._forbidden_title_regex = re.compile("|".join(forbidden_title_content))
 
+        self._all_text_valid = forbidden_text_content is None
+        if not self._all_text_valid:
+            self._forbidden_text_regex = re.compile("|".join(forbidden_text_content))
+
     def _valid_title(self, title: str):
 
         return self._all_title_valid or (
             self._forbidden_title_regex.search(title) is None
+        )
+
+    def _valid_text(self, text: str):
+
+        return self._all_text_valid or (
+            # only check the beginning of the string, don't want
+            # to spend too much time here
+            self._forbidden_text_regex.match(text) is None
         )
 
     def _find_next_page(
@@ -191,7 +208,9 @@ class PagesParser:
                     # with larger xml files).
                     raw_page["page_elem"].clear()
                     # check for unwanted titles (e.g. conversations)
-                    if not self._valid_title(page_title):
+                    if not self._valid_title(page_title) or not self._valid_text(
+                        page["text"]
+                    ):
                         continue
 
                     pages_found += 1
@@ -276,7 +295,9 @@ class PageProcessor:
         }
 
         title = tags_and_elems["title"].text
-        page_text = tags_and_elems["text"].text
+        # maybe not the smartest choice, but works, and not that
+        # many without text anyway, I don't think
+        page_text = tags_and_elems["text"].text or ""
         details = PageDetails(
             start_line=raw["start_line"], end_line=raw["end_line"], text=page_text
         )
@@ -311,9 +332,9 @@ class PageProcessor:
         )
 
 
-def get_forbidden_title_content(file: Path):
+def get_forbidden_content(file: Path):
     """
-    Read forbidden title content from `file`. Each line is expected
+    Read forbidden content from `file`. Each line is expected
     to have one forbidden example.
     """
 
@@ -328,9 +349,12 @@ def get_forbidden_title_content(file: Path):
 def main():
 
     parser = PagesParser(
-        forbidden_title_content=get_forbidden_title_content(
-            "forbidden_title_content.txt"
-        )
+        forbidden_title_content=get_forbidden_content(
+            Path() / "forbidden_title_content.txt"
+        ),
+        forbidden_text_content=get_forbidden_content(
+            Path() / "forbidden_text_content.txt"
+        ),
     )
 
     last_read_line = parser.parse_pages(continue_previous=False)
