@@ -1,11 +1,15 @@
 /*
 .*
 
+__pycache__
+
 # INCLUDE BACK
 # ------------
 
 # DIRECTORIES
 # ------------
+
+!src
 
 # DIRECTORIES
 # ============
@@ -15,7 +19,7 @@
 
 !.gitignore
 
-!main.py
+!parse_pages_from_xml.py
 
 !pyproject.toml
 !uv.lock
