@@ -246,6 +246,10 @@ class PagesParser:
                         if len(processing_results) >= process_worker_count:
                             processing_results.pop().get(10)
 
+            # wait for any worker to finish
+            while len(processing_results) > 0:
+                processing_results.pop().get(timeout=10)
+
         if len(pages) > 0:
             processor = PageProcessor(self.tag_prefix)
             processor.write_parsed_pages(pages)
