@@ -10,6 +10,7 @@ __pycache__
 # ------------
 
 !src
+!opensearch
 
 # DIRECTORIES
 # ============
@@ -20,6 +21,7 @@ __pycache__
 !.gitignore
 
 !parse_pages_from_xml.py
+!send_to_opensearch.py
 
 !pyproject.toml
 !uv.lock

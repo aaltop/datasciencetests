@@ -11,35 +11,11 @@ from multiprocessing.pool import AsyncResult, Pool
 
 from src.fifo import FIFO
 from src.ansi import ANSI
-
-
-class FileSystem:
-    root = Path()
-
-    data_dir = root / "data"
-
-    parsed_pages_dir = data_dir / "parsed_pages"
-
-    wiki_xml = data_dir / "wiki.xml"
-
-    def __init__(self):
-
-        dirs_to_make = [self.parsed_pages_dir]
-        for d in dirs_to_make:
-            d.mkdir(exist_ok=True)
+from src.filesystem import FileSystem
+from src.wiki_page import PageDetails
 
 
 fs = FileSystem()
-
-
-class PageDetails(TypedDict):
-    """
-    A Parsed page from a wikipedia XML dump.
-    """
-
-    start_line: int
-    end_line: int
-    text: str
 
 
 def get_lines(file: Path):
@@ -185,7 +161,7 @@ class PagesParser:
 
         pages_to_find = num if num is not None else float("infinity")
         pages_found = 0
-        pages: list[tuple[str, PageDetails]] = []
+        pages: list[PageDetails] = []
         clear_move_to_start = ANSI().erase_in_line("entire_line").cursor_to_column()
         start_time = time.time()
         processing_results = FIFO[AsyncResult]()
@@ -202,13 +178,13 @@ class PagesParser:
                         break
                     current_line = raw_page["end_line"]
 
-                    page_title, page = processor.raw_page_to_page_details(raw_page)
+                    page = processor.raw_page_to_page_details(raw_page)
                     # clear the raw element after to preserve memory
                     # (might require a more thorough clear of the parser
                     # with larger xml files).
                     raw_page["page_elem"].clear()
                     # check for unwanted titles (e.g. conversations)
-                    if not self._valid_title(page_title) or not self._valid_text(
+                    if not self._valid_title(page["title"]) or not self._valid_text(
                         page["text"]
                     ):
                         continue
@@ -228,7 +204,7 @@ class PagesParser:
                             flush=True,
                         )
 
-                    pages.append((page_title, page))
+                    pages.append(page)
 
                     # process in a worker periodically
                     if len(pages) >= self._batch_size:
@@ -256,11 +232,9 @@ class PagesParser:
 
         return current_line
 
-    def _process_pages(self, pages: list[tuple[str, PageDetails]], pool: Pool):
+    def _process_pages(self, pages: list[PageDetails], pool: Pool):
 
         processor = PageProcessor(self.tag_prefix)
-        # copy the list so the clear below doesn't affect
-        # the processing
         result = pool.apply_async(
             processor.write_parsed_pages,
             args=[pages],
@@ -286,7 +260,7 @@ class PageProcessor:
 
         self.tag_prefix = tag_prefix
 
-    def raw_page_to_page_details(self, raw: RawPage) -> tuple[str, PageDetails]:
+    def raw_page_to_page_details(self, raw: RawPage) -> PageDetails:
         """
         Transform the RawPage to PageDetails. `tag_prefix` is the namespace prefix
         of the tags of the XML elements of the XML document from which `raw`
@@ -303,19 +277,21 @@ class PageProcessor:
         # many without text anyway, I don't think
         page_text = tags_and_elems["text"].text or ""
         details = PageDetails(
-            start_line=raw["start_line"], end_line=raw["end_line"], text=page_text
+            title=title,
+            start_line=raw["start_line"],
+            end_line=raw["end_line"],
+            text=page_text,
         )
-        return title, details
+        return details
 
-    def write_parsed_pages(self, pages: list[tuple[str, PageDetails]]):
+    def write_parsed_pages(self, pages: list[PageDetails]):
         """
         Write the pages to file, returning the start and end lines that delimit
         the pages in the original XML document.
         """
 
-        pages_dicts = dict(pages)
-        start_line = pages[0][-1]["start_line"]
-        end_line = pages[-1][-1]["end_line"]
+        start_line = pages[0]["start_line"]
+        end_line = pages[-1]["end_line"]
 
         file_name = "{0}_{1}.json".format(start_line, end_line)
 
@@ -323,7 +299,7 @@ class PageProcessor:
             fs.parsed_pages_dir / file_name,
             "w",
         ) as f:
-            json.dump(pages_dicts, f, indent=2)
+            json.dump(pages, f, indent=2)
         return (start_line, end_line)
 
     def transform_and_write_parsed_pages(self, pages: list[RawPage]):
