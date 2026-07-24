@@ -8,7 +8,7 @@ class ANSI:
     """
     Class for working with ANSI escape codes (e.g. moving cursor in terminal,
     changing terminal text front/back color). Commands can be chain-created,
-    while passing the instance to str() creates the code, and ANSI.clear()
+    while passing the instance to str() creates the code, and self.clear()
     clears the command list.
     """
 

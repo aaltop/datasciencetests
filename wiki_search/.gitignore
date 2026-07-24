@@ -26,6 +26,8 @@ __pycache__
 !pyproject.toml
 !uv.lock
 
+!links.html
+
 # FILES
 # ============
 
