@@ -6,14 +6,10 @@ import json
 import requests
 
 
-class BaseBulkRequestCreator[RawDoc: dict, Doc: dict](abc.ABC):
+class BaseBulkRequestCreator[Doc: dict](abc.ABC):
     """
     Creates OpenSearch Bulk API create requests.
     """
-
-    def __init__(self, docs: Iterable[RawDoc]):
-
-        self.docs = docs
 
     @abc.abstractmethod
     def action_document_pairs(
@@ -49,15 +45,23 @@ class BaseBulkRequestCreator[RawDoc: dict, Doc: dict](abc.ABC):
         yield i, current_request_body
 
 
-class REST:
+class BaseREST[ResponseType](abc.ABC):
+    @abc.abstractmethod
+    def bulk(self, body: str) -> ResponseType:
+        """
+        Send bulk indexing request.
+        """
+
+    @abc.abstractmethod
+    def delete_index(self, index: str) -> ResponseType: ...
+
+
+class REST(BaseREST[requests.Response]):
     def __init__(self, url: str, session: requests.Session):
         self.session = session
         self.url = url
 
     def bulk(self, body: str):
-        """
-        Send bulk indexing request.
-        """
 
         final_url = f"{self.url}/_bulk"
         response = self.session.post(

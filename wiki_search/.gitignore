@@ -22,6 +22,7 @@ __pycache__
 
 !parse_pages_from_xml.py
 !send_to_opensearch.py
+!semantic_embedding.py
 
 !pyproject.toml
 !uv.lock
