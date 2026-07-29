@@ -1,7 +1,7 @@
-from typing import Iterable, NotRequired, TypedDict, Unpack
-from collections.abc import Generator
 import abc
 import json
+from collections.abc import Generator
+from typing import NotRequired, TypedDict, Unpack
 
 import requests
 
@@ -42,7 +42,8 @@ class BaseBulkRequestCreator[Doc: dict](abc.ABC):
                 yield i, current_request_body
                 current_request_body = ""
 
-        yield i, current_request_body
+        if len(current_request_body) > 0:
+            yield i, current_request_body
 
 
 class BaseREST[ResponseType](abc.ABC):

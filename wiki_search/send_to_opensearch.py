@@ -13,6 +13,7 @@ from src.env import Env
 from src.filesystem import FileSystem
 from src.wiki_page import (
     EmbeddingIndexedPage,
+    EmbeddingMixin,
     EmbeddingPageDetails,
     IndexedPage,
     PageDetails,
@@ -64,7 +65,9 @@ class EmbeddingPageBulkRequestCreator(
             yield (
                 action,
                 EmbeddingIndexedPage(
-                    title=doc["title"], text=doc["text"], embedding=doc["embedding"]
+                    title=doc["title"],
+                    text=doc["text"],
+                    text_embedding=doc["text_embedding"],
                 ),
             )
 
@@ -232,7 +235,10 @@ def combine_page_and_embedding(
     embeddings_with_list = {title: tens.tolist() for title, tens in embeddings.items()}
     pages: list[PageDetails] = json.loads(parsed_pages_file.read_text())
 
-    return [page | {"embedding": embeddings_with_list[page["title"]]} for page in pages]
+    return [
+        page | EmbeddingMixin(text_embedding=embeddings_with_list[page["title"]])
+        for page in pages
+    ]
 
 
 def test_embedding_send():
@@ -280,13 +286,7 @@ def main():
         fs.parsed_pages_dir.iterdir(), key=lambda x: int(str(x.stem).split("_")[0])
     )
 
-    # send_page_details(pages_shards[:1])
-
-    send_bulk_requests(
-        EmbeddingPageDetailsIterable(pages_shards[:1]),
-        EmbeddingPageBulkRequestCreator,
-        MockREST(),
-    )
+    send_embedding_page_details(pages_shards)
 
 
 if __name__ == "__main__":

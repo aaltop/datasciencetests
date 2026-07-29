@@ -13,12 +13,14 @@ class IndexedPage(TypedDict):
 type Embedding = list[float]
 
 
-class EmbeddingIndexedPage(IndexedPage):
+class EmbeddingMixin(TypedDict):
+    text_embedding: Embedding
+
+
+class EmbeddingIndexedPage(IndexedPage, EmbeddingMixin):
     """
     A wiki page with a semantic embedding to be indexed.
     """
-
-    embedding: Embedding
 
 
 class PageDetails(IndexedPage):
@@ -30,5 +32,4 @@ class PageDetails(IndexedPage):
     end_line: int
 
 
-class EmbeddingPageDetails(PageDetails):
-    embedding: Embedding
+class EmbeddingPageDetails(PageDetails, EmbeddingMixin): ...
