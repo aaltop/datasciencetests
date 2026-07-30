@@ -1,9 +1,14 @@
 import abc
+import contextlib
 import json
 from collections.abc import Generator
+from pathlib import Path
 from typing import NotRequired, TypedDict, Unpack
 
 import requests
+
+from src import filesystem
+from src.env import Env
 
 
 class BaseBulkRequestCreator[Doc: dict](abc.ABC):
@@ -76,15 +81,54 @@ class REST(BaseREST[requests.Response]):
         return self.session.delete(final_url)
 
 
-def create_session(*, user_pass: tuple[str, str], verify_cert: bool):
+@contextlib.contextmanager
+def default_rest():
+    """
+    Context manager that returns a `REST` API using default settings for the
+    session and the REST URL.
+    """
+
+    try:
+        s = create_default_session()
+        env = Env()
+        api = REST(f"https://localhost:{env.opensearch_rest_port}", s)
+        yield api
+    finally:
+        s.close()
+
+
+def create_session(*, user_pass: tuple[str, str], verify_cert: Path | bool):
     """
     Create a session suitable for connecting with a local OpenSearch REST API.
+
+    Arguments:
+        verify_cert:
+            A path to a certificate file (or directory),
+            or boolean indicating whether certificate should be verified
+            the normal way.
+
+            For e.g. a file path, point to the file that contains the same
+            certificate held by the OpenSearch nodes under
+            /usr/share/opensearch/config/root-ca.pem.
     """
 
     session = requests.Session()
     session.auth = user_pass
     session.verify = verify_cert
     return session
+
+
+def create_default_session():
+    """
+    Create a default session, assuming username of 'admin' and password
+    from the default environment location. `verify_cert` is set to False.
+    """
+
+    fs = filesystem.FileSystem()
+    env = Env()
+    return create_session(
+        user_pass=("admin", env.opensearch_password), verify_cert=fs.root_ca
+    )
 
 
 class ActionMetadata(TypedDict):

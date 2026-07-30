@@ -5,7 +5,6 @@ from collections.abc import Callable, Iterable, Iterator, Sized
 from pathlib import Path
 
 import torch
-import urllib3
 
 from src import opensearch
 from src.ansi import ANSI
@@ -21,9 +20,6 @@ from src.wiki_page import (
 
 fs = FileSystem()
 env = Env(fs.root / "env.toml")
-# making requests to locally served thing where we don't want to check
-# the ssl, so disable the warning
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 class BulkRequestCreatorWithIndex[T](opensearch.BaseBulkRequestCreator[T]):
@@ -130,11 +126,7 @@ def send_page_details(parsed_pages_files: list[Path]):
     Send PageDetails from the parsed pages files to the OpenSearch API.
     """
 
-    with opensearch.create_session(
-        user_pass=("admin", env.opensearch_password), verify_cert=False
-    ) as s:
-        api = opensearch.REST(f"https://localhost:{env.opensearch_rest_port}", s)
-
+    with opensearch.default_rest() as api:
         send_bulk_requests(
             PageDetailsIterable(parsed_pages_files),
             PageBulkRequestCreator,

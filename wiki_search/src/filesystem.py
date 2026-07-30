@@ -13,10 +13,11 @@ class FileSystem:
     data_dir = root / "data"
 
     parsed_pages_dir = data_dir / "parsed_pages"
-
     page_embeddings_dir = data_dir / "page_embeddings"
-
     wiki_xml = data_dir / "wiki.xml"
+
+    certs_dir = root / "certs"
+    root_ca = certs_dir / "root_ca.pem"
 
     def __init__(self):
 

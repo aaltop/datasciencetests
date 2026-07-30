@@ -1,0 +1,2 @@
+opensearch_password = "<password>"
+opensearch_rest_port = 9200
