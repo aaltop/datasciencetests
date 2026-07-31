@@ -62,14 +62,60 @@ class BaseREST[ResponseType](abc.ABC):
     def delete_index(self, index: str) -> ResponseType: ...
 
 
-class REST(BaseREST[requests.Response]):
+class RESTState:
     def __init__(self, url: str, session: requests.Session):
         self.session = session
-        self.url = url
+        self.base_url = url
 
+
+class ModelsREST(RESTState):
+    def models_url(self, suffix: str):
+
+        return f"{self.base_url}/_plugins/_ml/models/{suffix}"
+
+    def get_models(self):
+
+        data = json.dumps(dict(query=dict(match_all={})))
+        response = self.session.post(
+            url=self.models_url("_search"),
+            data=data,
+            headers={"Content-Type": "application/json"},
+        )
+        return response
+
+    def get_model(self, model_id: str):
+
+        response = self.session.get(url=self.models_url(model_id))
+        return response
+
+    def deploy_model(self, model_id: str):
+
+        return self.session.post(url=self.models_url(model_id + "/_deploy"))
+
+    def undeploy_model(self, model_id: str):
+
+        return self.session.post(url=self.models_url(model_id + "/_undeploy"))
+
+
+class ConnectorsREST(RESTState):
+    def connectors_url(self, suffix: str):
+
+        return f"{self.base_url}/_plugins/_ml/connectors/{suffix}"
+
+    def modify_connector(self, connector_id: str, data: dict):
+
+        response = self.session.put(
+            url=self.connectors_url(connector_id),
+            data=json.dumps(data),
+            headers={"Content-Type": "application/json"},
+        )
+        return response
+
+
+class REST(BaseREST[requests.Response], ModelsREST, ConnectorsREST):
     def bulk(self, body: str):
 
-        final_url = f"{self.url}/_bulk"
+        final_url = f"{self.base_url}/_bulk"
         response = self.session.post(
             final_url, data=body, headers={"Content-Type": "application/x-ndjson"}
         )
@@ -77,7 +123,7 @@ class REST(BaseREST[requests.Response]):
 
     def delete_index(self, index: str):
 
-        final_url = f"{self.url}/{index}"
+        final_url = f"{self.base_url}/{index}"
         return self.session.delete(final_url)
 
 

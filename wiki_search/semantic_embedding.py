@@ -3,9 +3,8 @@ import time
 from pathlib import Path
 
 import torch
-from sentence_transformers import SentenceTransformer
 
-from src import filesystem
+from src import filesystem, models
 from src.wiki_page import PageDetails
 
 fs = filesystem.FileSystem()
@@ -41,13 +40,8 @@ def save_embeddings(
 def main():
 
     start_time = time.time()
-    download_model = False
 
-    model = SentenceTransformer(
-        "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
-        device="cuda:0",
-        local_files_only=not download_model,
-    )
+    model = models.sentence_transformer(download_model=False)
 
     # print("time to load model:", time.time() - start_time)
     start_time = time.time()
