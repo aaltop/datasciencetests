@@ -6,10 +6,11 @@ from pathlib import Path
 
 import torch
 
-from src import opensearch
+from opensearch import rest
 from src.ansi import ANSI
 from src.env import Env
 from src.filesystem import FileSystem
+from src.opensearch import bulk_request
 from src.wiki_page import (
     EmbeddingIndexedPage,
     EmbeddingMixin,
@@ -22,7 +23,7 @@ fs = FileSystem()
 env = Env(fs.root / "env.toml")
 
 
-class BulkRequestCreatorWithIndex[T](opensearch.BaseBulkRequestCreator[T]):
+class BulkRequestCreatorWithIndex[T](bulk_request.BaseBulkRequestCreator[T]):
     index: str
 
 
@@ -36,7 +37,7 @@ class PageBulkRequestCreator(BulkRequestCreatorWithIndex[IndexedPage]):
     def action_document_pairs(self):
 
         for doc in self.docs:
-            action = opensearch.ActionCreator.create(
+            action = bulk_request.ActionCreator.create(
                 _index=self.index, _id=f"{doc['start_line']}-{doc['end_line']}"
             )
             yield action, IndexedPage(title=doc["title"], text=doc["text"])
@@ -54,7 +55,7 @@ class EmbeddingPageBulkRequestCreator(
     def action_document_pairs(self):
 
         for doc in self.docs:
-            action = opensearch.ActionCreator.create(
+            action = bulk_request.ActionCreator.create(
                 _index=self.index,
                 _id=f"{doc['start_line']}-{doc['end_line']}",
             )
@@ -84,7 +85,7 @@ class Response:
 def send_bulk_requests[T](
     file_iterable: SizedIterable[list[T]],
     request_creator_factory: Callable[[Iterable[T]], BulkRequestCreatorWithIndex[T]],
-    rest_api: opensearch.BaseREST[Response],
+    rest_api: rest.BaseREST[Response],
     delete_index: bool = False,
 ):
 
@@ -126,7 +127,7 @@ def send_page_details(parsed_pages_files: list[Path]):
     Send PageDetails from the parsed pages files to the OpenSearch API.
     """
 
-    with opensearch.default_rest() as api:
+    with rest.default_rest() as api:
         send_bulk_requests(
             PageDetailsIterable(parsed_pages_files),
             PageBulkRequestCreator,
@@ -140,7 +141,7 @@ def send_embedding_page_details(parsed_pages_files: list[Path]):
     embedding files to the OpenSearch API.
     """
 
-    with opensearch.default_rest() as api:
+    with rest.default_rest() as api:
         send_bulk_requests(
             EmbeddingPageDetailsIterable(parsed_pages_files),
             EmbeddingPageBulkRequestCreator,
@@ -254,7 +255,7 @@ def test_pages_send():
 MockResponse = namedtuple("Response", ["ok", "text"])
 
 
-class MockREST(opensearch.BaseREST):
+class MockREST(rest.BaseREST):
     """
     Mock the OpenSearch API for testing.
     """

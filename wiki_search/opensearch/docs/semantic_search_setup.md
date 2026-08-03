@@ -188,8 +188,36 @@ POST _reindex
 }
 ```
 
+# Setting default model ID for index
+
+Instead of having to pass a model ID with every query when querying an index
+using neural search, the model ID can be specified in [a search pipeline](https://docs.opensearch.org/latest/search-plugins/search-pipelines/neural-query-enricher/):
+```
+PUT /_search/pipeline/text_embedding_model_default
+{
+  "request_processors": [
+    {
+      "neural_query_enricher" : {
+        "tag": "text_embedding_model_default",
+        "description": "Sets a default text embedding model ID.",
+        "default_model_id": "<model_id>"
+      }
+    }
+  ]
+}
+
+PUT /<index_name>/_settings 
+{
+  "index.search.default_pipeline" : "text_embedding_model_default"
+}
+```
+
+https://docs.opensearch.org/latest/search-plugins/search-pipelines/using-search-pipeline/#default-search-pipeline
+
 # Links
 
 Tutorial https://docs.opensearch.org/latest/tutorials/vector-search/neural-search-tutorial/
 
 Supported semantic models https://docs.opensearch.org/latest/ml-commons-plugin/pretrained-models/#sentence-transformers
+
+Search pipelines https://docs.opensearch.org/latest/search-plugins/search-pipelines/index/

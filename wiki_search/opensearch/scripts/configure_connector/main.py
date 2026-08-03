@@ -30,7 +30,7 @@ from pathlib import Path
 sys.path.append(str(Path().absolute()))
 
 
-from src import opensearch
+from src.opensearch import rest
 
 painless_script = r"""
 def input = params.text_docs != null
@@ -61,7 +61,7 @@ def some():
 
     model_id = env["model_id"]
     connector_id = env["connector_id"]
-    with opensearch.default_rest() as api:
+    with rest.default_rest() as api:
         api.undeploy_model(model_id)
         response = api.modify_connector(connector_id, connector_put)
         api.deploy_model(model_id)

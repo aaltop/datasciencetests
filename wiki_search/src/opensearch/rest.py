@@ -1,54 +1,13 @@
 import abc
 import contextlib
 import json
-from collections.abc import Generator
 from pathlib import Path
-from typing import NotRequired, TypedDict, Unpack
+from typing import Literal, NotRequired, TypedDict
 
 import requests
 
 from src import filesystem
 from src.env import Env
-
-
-class BaseBulkRequestCreator[Doc: dict](abc.ABC):
-    """
-    Creates OpenSearch Bulk API create requests.
-    """
-
-    @abc.abstractmethod
-    def action_document_pairs(
-        self,
-    ) -> Generator[tuple[CreateAction, Doc]]:
-        """
-        Yield pairs of create actions and documents.
-        """
-
-    def create_bulk_requests(
-        self, approx_size_bytes: int = 5e6
-    ) -> Generator[tuple[int, str]]:
-        """
-        Yield request bodies of some approximate max size.
-
-        Returns:
-            Tuple with integer denoting how many documents have been
-            processed thus far, and the next request body to send.
-        """
-
-        action_and_doc = "{action}\n{doc}\n"
-        current_request_body = ""
-        i = 0
-        for action, document in self.action_document_pairs():
-            i += 1
-            current_request_body += action_and_doc.format(
-                action=json.dumps(action), doc=json.dumps(document)
-            )
-            if len(current_request_body) > approx_size_bytes:
-                yield i, current_request_body
-                current_request_body = ""
-
-        if len(current_request_body) > 0:
-            yield i, current_request_body
 
 
 class BaseREST[ResponseType](abc.ABC):
@@ -66,6 +25,35 @@ class RESTState:
     def __init__(self, url: str, session: requests.Session):
         self.session = session
         self.base_url = url
+
+
+class IndexREST(RESTState):
+    def index_url(self, index_name: str):
+
+        return f"{self.base_url}/{index_name}"
+
+    def search_index(
+        self,
+        index_name: str,
+        *,
+        semantic_query: str | None = None,
+        match_query: str | None = None,
+    ):
+
+        if (semantic_query is None) and (match_query is None):
+            raise ValueError(
+                "One of 'semantic_query' and 'match_query' should be not None."
+            )
+
+        final_url = self.index_url(index_name) + "/_search"
+        data = default_index_search_body(semantic_query)
+        data["_source"] = {"excludes": ["text_embedding"]}
+        data = json.dumps(data)
+
+        response = self.session.post(
+            final_url, data, headers={"Content-Type": "application/json"}
+        )
+        return response
 
 
 class ModelsREST(RESTState):
@@ -112,7 +100,7 @@ class ConnectorsREST(RESTState):
         return response
 
 
-class REST(BaseREST[requests.Response], ModelsREST, ConnectorsREST):
+class REST(BaseREST[requests.Response], ModelsREST, ConnectorsREST, IndexREST):
     def bulk(self, body: str):
 
         final_url = f"{self.base_url}/_bulk"
@@ -177,28 +165,27 @@ def create_default_session():
     )
 
 
-class ActionMetadata(TypedDict):
-    """
-    Contents of a OpenSearch Bulk API request Action.
+class IndexSearchBody[ExcludeLiterals: Literal](TypedDict):
+    _source: NotRequired[Source[ExcludeLiterals]]
 
-    See https://docs.opensearch.org/latest/api-reference/document-apis/bulk/#action-metadata-fields
-    """
+    query: Query
 
-    _index: str
-    _id: NotRequired[str]
+    class Source[T](TypedDict):
+        excludes: list[T]
+
+    class Query(TypedDict):
+        neural: IndexSearchBody.Neural
+
+    class Neural(TypedDict):
+        text_embedding: IndexSearchBody.TextEmbedding
+
+    class TextEmbedding(TypedDict):
+        query_text: str
+        k: int
 
 
-class CreateAction(TypedDict):
-    create: ActionMetadata
+def default_index_search_body(semantic_query: str):
 
-
-class ActionCreator:
-    """
-    OpenSearch Bulk API action creator.
-
-    See https://docs.opensearch.org/latest/api-reference/document-apis/bulk/#actions
-    """
-
-    @staticmethod
-    def create(**kwargs: Unpack[ActionMetadata]) -> CreateAction:
-        return CreateAction(create=kwargs)
+    return IndexSearchBody(
+        query={"neural": {"text_embedding": {"query_text": semantic_query, "k": 5}}},
+    )
