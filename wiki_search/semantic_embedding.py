@@ -46,7 +46,7 @@ def main():
     # print("time to load model:", time.time() - start_time)
     start_time = time.time()
     page_files = fs.get_parsed_pages_files()
-    files_to_process = 5
+    files_to_process = 10
     files_processed = 0
     for i, page_file in enumerate(page_files):
         page_embeddings_file = fs.page_embeddings_file(page_file)

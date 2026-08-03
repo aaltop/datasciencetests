@@ -140,11 +140,7 @@ def send_embedding_page_details(parsed_pages_files: list[Path]):
     embedding files to the OpenSearch API.
     """
 
-    with opensearch.create_session(
-        user_pass=("admin", env.opensearch_password), verify_cert=False
-    ) as s:
-        api = opensearch.REST(f"https://localhost:{env.opensearch_rest_port}", s)
-
+    with opensearch.default_rest() as api:
         send_bulk_requests(
             EmbeddingPageDetailsIterable(parsed_pages_files),
             EmbeddingPageBulkRequestCreator,

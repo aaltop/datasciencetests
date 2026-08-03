@@ -32,3 +32,8 @@ url = "https://download.pytorch.org/whl/rocm7.2"
 [[tool.uv.index]]
 name = "torch-cuda"
 url = "https://download.pytorch.org/whl/cu132"
+
+[dependency-groups]
+dev = [
+    "pyinstrument>=5.1.3",
+]
