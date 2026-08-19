@@ -24,6 +24,7 @@ __pycache__
 !send_to_opensearch.py
 !semantic_embedding.py
 !serve_text_embedding_model.py
+!ollama_chat.py
 
 !pyproject.toml
 !uv.lock
