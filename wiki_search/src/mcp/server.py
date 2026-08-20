@@ -7,55 +7,12 @@ sys.path.append(str(Path().absolute()))
 
 from mcp.server import MCPServer
 from src.opensearch import rest
-from src.strings import NestedDelimitedFinder
+from src.transform import clean_wiki_text
 
 server = MCPServer("opensearch")
 
 
 INDEX_NAME = "semantic_wiki_pages"
-
-
-wavy = re.compile("{{.+?({{.+}})?.+?}}")
-file_link = re.compile(r"\[\[.+?:.+?\]\]")
-article_link = re.compile(r"\[\[(?P<text>.+?)\]\]")
-renamed_article_link = re.compile(r"\[\[(.+?\|)?(?P<text>.+?)\]\]")
-
-
-def _process_squareb_contents(article_name: str):
-    _split = article_name.split("|")
-    if len(_split) > 1:
-        return _split[1]
-
-    # could be more sophisticated, but should be fine for now
-    # used to remove stuff like "[[Category:<whatever>]]"
-    if ":" in article_name:
-        return ""
-
-    return article_name
-
-
-_delimited_wavy = NestedDelimitedFinder(r"\{\{", r"\}\}", left="{{", right="}}")
-_delimited_square = NestedDelimitedFinder(r"\[\[", r"\]\]", left="[[", right="]]")
-
-
-def _clean_text(text: str):
-
-    text = "".join(
-        section.contained_content
-        for section in _delimited_wavy.find(text)
-        if not section.delimited
-    )
-
-    text = "".join(
-        _process_squareb_contents(section.contained_content)
-        if section.delimited
-        else section.contained_content
-        for section in _delimited_square.find(text)
-    )
-
-    text = text.strip().split("\n")[0]
-
-    return text
 
 
 @server.tool()
@@ -81,7 +38,10 @@ def search_wiki(query: str):
     )
 
     title_and_text = [
-        dict(title=hit["_source"]["title"], text=_clean_text(hit["_source"]["text"]))
+        dict(
+            title=hit["_source"]["title"],
+            text=clean_wiki_text(hit["_source"]["text"]).split("\n")[0],
+        )
         for hit in hits
     ]
     return json.dumps(title_and_text)

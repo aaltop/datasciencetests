@@ -3,6 +3,10 @@
 Setup for testing OpenSearch with [data from Wikipedia](https://dumps.wikimedia.org/),
 specifically using the XML dumps such as [the current ones](https://dumps.wikimedia.org/other/mediawiki_content_current/).
 
+There is also a retrieval-augmented generation (RAG) setup using a local LLM
+through [ollama](https://ollama.com/). This setup utilises [model
+context protocol (MCP)](https://modelcontextprotocol.io/docs/latest/getting-started/intro). 
+
 ## Scripts
 
 - [Parse pages from the XML files](./parse_pages_from_xml.py)
@@ -12,6 +16,10 @@ specifically using the XML dumps such as [the current ones](https://dumps.wikime
 - [Send documents to OpenSearch](./send_to_opensearch.py)
 
 - [Serve embedding model](./serve_text_embedding_model.py)
+
+- [Serve MCP server](./src/mcp/server.py)
+
+- [Chat with local model](./ollama_chat.py)
 
 ## OpenSearch Configuration
 
@@ -23,7 +31,8 @@ in OpenSearch.
 
 OpenSearch by default creates self-signed certificates for development
 testing. Getting the certificate from the cluster and placing it under
-`certs/root_ca.pem` should allow for TLS verification to work. Note that
+`certs/root_ca.pem` should allow for TLS verification to work (it is used
+in [connecting to the cluster](./src/opensearch/rest.py#164)). Note that
 this is just for testing/development setups.
 
 ## Environment variables
