@@ -10,42 +10,28 @@ from mcp import Client as MCPClient
 from ollama import ChatResponse, chat
 
 
-def divide(x: float, y: float) -> float:
-    """
-    Divide two floating point values.
-
-    Args:
-        x:
-            The numerator.
-        y:
-            The denominator.
-
-    Returns:
-        The result of the division.
-    """
-
-    return x / y
-
-
 async def query_mcp_client(tool: str, arguments):
 
-    print("arguments to query:", arguments)
     async with MCPClient("http://localhost:8110/mcp") as client:
         response = await client.call_tool(name=tool, arguments=arguments)
 
-    return json.dumps([json.loads(cont.text) for cont in response.content])
+    return json.dumps([cont.text for cont in response.content])
 
 
 class ChatResponsePrinter:
     def __init__(self):
-        pass
+        self.thinking = False
 
     def print(self, response: ChatResponse):
 
         if response.message.thinking:
+            self.thinking = True
             print("\x1b[32m" + response.message.thinking + "\x1b[m", end="", flush=True)
 
         if response.message.content:
+            if self.thinking:
+                self.thinking = False
+                print()
             print(response.message.content, end="", flush=True)
 
     async def print_all(self, responses: AsyncIterator[ChatResponse]):
@@ -54,6 +40,7 @@ class ChatResponsePrinter:
             self.print(response)
 
         print()
+        self.thinking = False
 
 
 class Chat:
@@ -102,15 +89,29 @@ class Chat:
 
         assistant_response_think = ""
         assistant_response = ""
-        tool_result = None
-        tool_calls = None
+        tool_results = []
+        tool_calls = []
         for chunk in stream:
             if chunk.message.tool_calls:
-                tool_calls = chunk.message.tool_calls
-                call = chunk.message.tool_calls[0]
-                tool_result = await query_mcp_client(
-                    call.function.name, call.function.arguments
+                tool_calls += chunk.message.tool_calls
+
+                _tool_results = list(
+                    await asyncio.gather(
+                        *(
+                            query_mcp_client(
+                                call.function.name, call.function.arguments
+                            )
+                            for call in chunk.message.tool_calls
+                        )
+                    )
                 )
+                tool_results += [
+                    (name, result)
+                    for name, result in zip(
+                        (c.function.name for c in chunk.message.tool_calls),
+                        _tool_results,
+                    )
+                ]
 
             if chunk.message.thinking:
                 assistant_response_think += chunk.message.thinking
@@ -121,15 +122,14 @@ class Chat:
 
         if len(assistant_response_think) > 0:
             thinking_message = dict(role="assistant", thinking=assistant_response_think)
-            if tool_calls is not None:
-                thinking_message["tool_calls"] = [tool_calls[0]]
+            if len(tool_calls) > 0:
+                thinking_message["tool_calls"] = tool_calls
             self._messages.append(thinking_message)
 
-        if tool_result is not None:
-            self._messages.append(
-                dict(
-                    role="tool", tool_name=call.function.name, content=str(tool_result)
-                )
+        if len(tool_results) > 0:
+            self._messages.extend(
+                dict(role="tool", tool_name=name, content=str(result))
+                for name, result in tool_results
             )
 
         if len(assistant_response) > 0:
