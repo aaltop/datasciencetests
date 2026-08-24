@@ -1,0 +1,1 @@
+julia --interactive --project=. --eval "includet(\"$1\")"

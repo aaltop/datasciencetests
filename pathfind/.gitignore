@@ -1,0 +1,29 @@
+/*
+.*
+
+# INCLUDE BACK
+# ------------
+
+# DIRECTORIES
+# ------------
+
+# DIRECTORIES
+# ============
+
+# FILES
+# ------------
+
+!.gitignore
+
+!main.jl
+
+!Manifest.toml
+!Project.toml
+
+!start_julia.sh
+
+# FILES
+# ============
+
+# INCLUDE BACK
+# ============
