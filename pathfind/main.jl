@@ -51,13 +51,8 @@ end
 _data = _Data()
 
 function roads()
-    parquet_file = "data/roads.parquet"
     if isnothing(_data.roads)
-        if !isfile(parquet_file)
-            df = GDF.read("data/Tieosoiteverkko_hall_lk-Elinvoimakeskus-2026-01-01/Tieosoiteverkko_hall_lk_elinvoimakeskus_01_01_2026.shp")
-            GP.write(parquet_file, df)
-        end
-        _data.roads = GP.read(parquet_file)
+        _data.roads = GDF.read("data/Tieosoiteverkko_hall_lk-Elinvoimakeskus-2026-01-01/Tieosoiteverkko_hall_lk_elinvoimakeskus_01_01_2026.shp")
     end
     return _data.roads
 end
@@ -258,6 +253,79 @@ function road_municipality_intersect()
     end
 
     return _data.road_municipality_intersect
+end
+
+function road_intersections()
+    parquet_file = "data/road_intersections.parquet"
+    if !isfile(parquet_file)
+        PQ.writefile(parquet_file, _road_intersections(DF.select(roads(), :OBJECTID => :id, :geometry)))
+    end
+    return DF.DataFrame(PQ.readfile(parquet_file); copycols=false)
+end
+
+"""
+Calculate intersections of roads.
+
+`road_df` should contain columns of `geometry` and `id`.
+"""
+function _road_intersections(road_df::DF.DataFrame)
+
+    println("Calculating convex hulls for road intersection calculation...")
+    # using convex hulls to quickly calculate viable candidates
+    # for intersection. Bounding boxes might be faster, but insanely enough,
+    # there's no ready-made calculation for that in GO (don't know if
+    # BBoxes are much a thing when working non-euclidean systems, but to
+    # my understanding one country would still generally be approximated
+    # as a manifold), and I'm not spending
+    # time sorting that out myself. There IS a minimum bounding circle calculation
+    # in GO, but it's excrutiatingly slow for some reason; I guess it
+    # might just be a slow calculation in general, don't really know.
+    # Anyway, a close-to-minimum bounding circle would be fastest for
+    # this comparison, I think, but this'll do for now.
+    convex_hulls = DF.transform(road_df, :geometry => (x -> GO.convex_hull.(x)) => :geometry)
+
+    n = size(road_df)[1]
+    intersections = []
+
+    muni = DF.innerjoin(road_municipality_intersect(), DF.select(road_df, :id), on=:road_id => :id)
+    roads_calculated = 1
+    total_roads = size(muni)[1]
+    for muni_id in unique(muni.municipality_id)
+
+        # only consider the roads that are in the same municipality
+        same_muni_road_ids = DF.innerjoin(muni, DF.DataFrame([:municipality_id => muni_id]), on=:municipality_id)
+        same_muni_roads = DF.innerjoin(road_df, same_muni_road_ids, on=:id => :road_id)
+        same_muni_hulls = DF.innerjoin(convex_hulls, same_muni_road_ids, on=:id => :road_id)
+
+        n = size(same_muni_hulls)[1]
+        for i in 1:(n-1)
+            print("\r")
+            # a *rough* idea of how many left to calculate
+            print("Road intersection calculation $roads_calculated/$total_roads")
+
+            # don't repeat calculations; intersection is symmetric in
+            # its operands, so geom2 intersects with geom1 if and only
+            # if geom1 intersects with geom2
+            compare_road = same_muni_roads[i, :]
+            other_slice = i+1:n
+            # only compare against roads whose convex hull overlap that
+            # of the compared road
+            other_road = same_muni_roads[other_slice, :][intersects(same_muni_hulls[i, :geometry], same_muni_hulls[other_slice, :geometry]), :]
+
+            push!(
+                intersections,
+                DF.DataFrame(
+                    [:id1 => compare_road.id, :id2 => other_road.id[intersects(compare_road.geometry, other_road.geometry)]]
+                )
+            )
+            roads_calculated += 1
+        end
+
+
+    end
+    println()
+    return DF.vcat(intersections...)
+
 end
 
 function get_fig_ax()
