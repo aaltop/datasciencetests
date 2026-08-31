@@ -2,95 +2,26 @@ import XML
 import DataFrames as DF
 import GeoDataFrames as GDF
 import GeometryOps as GO
-import GeoParquet as GP
 import GeoInterface as GI
-import Parquet2 as PQ
 using GLMakie
 using Shapefile
+using EnumX
 
-const TURKU_ID = "PNS_40294758"
-const HELSINKI_ID = "PNS_40342733"
+include("src/data.jl")
 
-"""
-Parse .xsd files that come with placenames data.
-"""
-function parse_placenames_xsd(filename::String)
-
-    doc = XML.read("$filename", XML.Node)
-    enumerations = XML.xpath(doc, "//xs:enumeration")
-
-    rows::Vector{Dict{String,Union{Int,String}}} = []
-    for enumeration in enumerations
-
-        push!(rows, Dict("id" => parse(Int, enumeration["value"])))
-        for doc in XML.xpath(enumeration, "//xs:documentation")
-
-            key = doc["xml:lang"]
-            rows[end][key] = XML.value(XML.only(doc))
-
-        end
-
-
-    end
-
-    return DF.DataFrame(rows)
-
-end
-
-mutable struct _Data
-    roads::Union{DF.DataFrame,Nothing}
-    country::Union{DF.DataFrame,Nothing}
-    placenames::Union{DF.DataFrame,Nothing}
-    municipality_geom::Union{DF.DataFrame,Nothing}
-    road_region_intersect::Union{DF.DataFrame,Nothing}
-    road_municipality_intersect::Union{DF.DataFrame,Nothing}
-
-    _Data() = new(nothing, nothing, nothing, nothing, nothing, nothing)
-end
+const TURKU_ID = Int32(40294758)
+const HELSINKI_ID = Int32(40342733)
 
 _data = _Data()
 
-function roads()
-    if isnothing(_data.roads)
-        _data.roads = GDF.read("data/Tieosoiteverkko_hall_lk-Elinvoimakeskus-2026-01-01/Tieosoiteverkko_hall_lk_elinvoimakeskus_01_01_2026.shp")
-    end
-    return _data.roads
-end
+"""
+Search for places based on placename, region, subregion, and municipality, or on IDs.
+If `ids` is passed, only considers those for search.
 
-function country()
-    if isnothing(_data.country)
-        _data.country = GDF.read("data/TietoaKuntajaosta_2026_10k/SuomenValtakunta_2026_10k.shp")
-    end
-    return _data.country
-end
-
-function placenames()
-    parquet_file = "data/placenames.parquet"
-    if isnothing(_data.placenames)
-        if !isfile(parquet_file)
-            df = GDF.read("data/placenames_simple_2026_05/placenames_simple.xml")
-            df.region = parse.(Int, df.region)
-            df.subregion = parse.(Int, df.subregion)
-            df.municipality = parse.(Int, df.municipality)
-
-            # join with region, subregion, and municipality names
-            df = DF.innerjoin(df, DF.select(regions(), :id, :fin => :region_fin), on=:region => :id)
-            df = DF.innerjoin(df, DF.select(subregions(), :id, :fin => :subregion_fin), on=:subregion => :id)
-            df = DF.innerjoin(df, DF.select(municipality(), :id, :fin => :municipality_fin), on=:municipality => :id)
-
-            # GeoParquet for some reason requires it to be 'geometry'
-            df = DF.rename(df, :placeLocation => :geometry)
-
-            GP.write(parquet_file, df)
-        end
-
-        _data.placenames = GP.read(parquet_file)
-    end
-    return _data.placenames
-end
-
-"""Search for places based on placename, region, subregion, and municipality."""
-function search_places(; placename::Regex=r"", region::Regex=r"", subregion::Regex=r"", municipality::Regex=r"")
+When searching by ID, the order of rows returned is the same as the passed
+IDs, IDs not found represented by empty rows.
+"""
+function search_places(; placename::Regex=r"", region::Regex=r"", subregion::Regex=r"", municipality::Regex=r"", ids::Vector{Int32})
 
     # maybe a better way to do it than this, but using subset() took
     # much longer, funnily
@@ -101,6 +32,10 @@ function search_places(; placename::Regex=r"", region::Regex=r"", subregion::Reg
     # down.
 
     df = placenames()
+
+    if length(ids) > 0
+        return DF.rightjoin(df, DF.DataFrame([:placeNameId => ids]), on=:placeNameId, order=:right)
+    end
 
     if municipality != r""
         df = df[occursin.(municipality, df.municipality_fin), :]
@@ -121,45 +56,14 @@ function search_places(; placename::Regex=r"", region::Regex=r"", subregion::Reg
     return df
 end
 
-function regions()
-    return parse_placenames_xsd("data/placenames_simple_2026_05/region.xsd")
-end
+"""
+Calculate which geometries in `candidates` are closest to those in `to`.
 
-function regions_geom()
-    reg = GDF.read("data/TietoaKuntajaosta_2026_4500k/SuomenMaakuntajako_2026_4500k.shp")
-    return DF.transform(reg, :NATCODE => DF.ByRow(x -> parse(Int, x)) => :NATCODE)
-end
-
-function subregions()
-    return parse_placenames_xsd("data/placenames_simple_2026_05/subregion.xsd")
-end
-
-function municipality()
-    return parse_placenames_xsd("data/placenames_simple_2026_05/municipality.xsd")
-end
-
-function municipality_geom()
-    parquet_file = "data/municipality_geom.parquet"
-    if isnothing(_data.municipality_geom)
-        if !isfile(parquet_file)
-
-            muni = GDF.read("data/TietoaKuntajaosta_2026_4500k/SuomenKuntajako_2026_4500k.shp")
-            muni = DF.transform(muni, :NATCODE => DF.ByRow(x -> parse(Int, x)) => :NATCODE)
-
-            reg = DF.select(regions_geom(), :geometry, :NATCODE => :id)
-
-            intersections = intersects(reg, DF.select(muni, :geometry => DF.ByRow(GO.centroid) => :geometry, :NATCODE => :id))
-
-            intersections = DF.rename(intersections, :id1 => :region_id)
-
-            GDF.write(parquet_file, DF.innerjoin(muni, intersections, on=:NATCODE => :id2))
-        end
-
-        _data.municipality_geom = GDF.read(parquet_file)
-    end
-
-    return _data.municipality_geom
-
+Returns the index ordering of the values in `candidates`, from closest
+to farthest.
+"""
+function closest(to, candidates)
+    return sortperm(GO.distance.([to], candidates))
 end
 
 """
@@ -258,15 +162,18 @@ end
 function road_intersections()
     parquet_file = "data/road_intersections.parquet"
     if !isfile(parquet_file)
-        PQ.writefile(parquet_file, _road_intersections(DF.select(roads(), :OBJECTID => :id, :geometry)))
+        df = _road_intersections(DF.select(roads(), :OBJECTID => :id, :geometry))
+        PQ.writefile(parquet_file, bidirectional_associative_table(df, :id1, :id2))
     end
     return DF.DataFrame(PQ.readfile(parquet_file); copycols=false)
 end
 
 """
-Calculate intersections of roads.
+Calculate intersections of roads. `road_df` should contain columns of
+`geometry` and `id`.
 
-`road_df` should contain columns of `geometry` and `id`.
+Returns a dataframe with columns `id1` and `id2` representing the
+intersecting roads.
 """
 function _road_intersections(road_df::DF.DataFrame)
 
@@ -328,6 +235,42 @@ function _road_intersections(road_df::DF.DataFrame)
 
 end
 
+"""
+Calculate a bidirectional associative table. The table is assumed to
+be an associative one, where IDs in column 1 (id1) are mapped to IDs
+in column 2 (id2). "Bidirectional" here means that any relation of a particular
+ID in id1 and id2 is is added to id1, such that to find the associations
+of that ID, it is only necessary to filter based on that ID in either of
+the two columns id1 and id2.
+
+## Examples
+
+```
+Non-bidirectional:
+---
+id1 | id2
+1 | 2
+3 | 1
+---
+
+Bidirectional:
+---
+id1 | id2
+1 | 2
+2 | 1
+3 | 1
+1 | 3
+---
+```
+
+"""
+function bidirectional_associative_table(df::DF.DataFrame, id1::Symbol, id2::Symbol)
+
+    col1, col2 = df[:, id1], df[:, id2]
+    DF.rename(DF.DataFrame(Set(Pair(p...) for p in vcat(zip(col1, col2)..., zip(col2, col1)...))), :first => id1, :second => id2)
+
+end
+
 function get_fig_ax()
     fig = Figure()
     ax = Axis(fig[1, 1])
@@ -337,22 +280,32 @@ end
 
 function plot_country(ax::Axis)
     plot!(ax, country().geometry; color="#f5deb366", strokecolor="#000F", strokewidth=1)
+    xlims!(ax, [-1e6, 1.5e6])
 end
 
-function _plot(ax::Axis)
+@enumx _PlotOption begin
+    places
+    municipality
+    region
+end
+
+function _plot(ax::Axis, options::Vector=[instances(_PlotOption.T)...])
 
     empty!(ax)
 
     plot_country(ax)
-    turku = placenames()[placenames().gml_id.==TURKU_ID, :geometry][1]
-    hel = placenames()[placenames().gml_id.==HELSINKI_ID, :geometry][1]
 
-    plot!(ax, turku)
-    plot!(ax, hel)
+    if _PlotOption.places in options
+        tur_hel = search_places(ids=[TURKU_ID, HELSINKI_ID]).geometry
 
-    regi = municipality_geom()
+        plot!(ax, tur_hel[1])
+        plot!(ax, tur_hel[2])
+    end
 
-    plot!(ax, regi.geometry; color="#0000", strokecolor="#0a0f", strokewidth=1)
-    plot!(ax, regions_geom().geometry; color="#0000", strokecolor="#00fa", strokewidth=1)
-
+    if _PlotOption.municipality in options
+        plot!(ax, municipality_geom().geometry; color="#0000", strokecolor="#0a0f", strokewidth=1)
+    end
+    if _PlotOption.region in options
+        plot!(ax, regions_geom().geometry; color="#0000", strokecolor="#00fa", strokewidth=1)
+    end
 end
