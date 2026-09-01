@@ -8,20 +8,56 @@ using Shapefile
 using EnumX
 
 include("src/data.jl")
+include("src/geom.jl")
 
 const TURKU_ID = Int32(40294758)
 const HELSINKI_ID = Int32(40342733)
 
 _data = _Data()
 
+function plot_route!(ax::Axis, start, destination)
+
+    route = pathfind(start, destination)
+    plot!(ax, start.geometry)
+    plot!(ax, destination.geometry)
+    plot!(ax, route.geometry)
+
+end
+
+function pathfind(start, destination)
+
+    start_roads = closest_roads(start)
+    max_iter = 10000
+    curr_iter = 1
+    rd_inter = road_intersections()
+    path_ = [start_roads[1, :]]
+    while curr_iter <= max_iter
+        current_intersecting_id = subset_by_id(rd_inter, :id1 => [path_[end].OBJECTID]).id2
+        current_intersecting = subset_by_id(roads(), :OBJECTID => current_intersecting_id)
+        closest_roads_ = current_intersecting[closest(destination.geometry, current_intersecting.geometry), :]
+
+        next_road = closest_roads_[1, :]
+
+        # if previous found road is closer (or as close) as the new
+        # one, assume as close as possible (might not be the case, however)
+        if closest(destination.geometry, [path_[end].geometry, next_road.geometry]) == [1, 2]
+            break
+        end
+        push!(path_, next_road)
+        curr_iter += 1
+    end
+    return DF.DataFrame(path_)
+end
+
 """
 Search for places based on placename, region, subregion, and municipality, or on IDs.
-If `ids` is passed, only considers those for search.
 
-When searching by ID, the order of rows returned is the same as the passed
-IDs, IDs not found represented by empty rows.
+
+If `ids` is passed, only considers those for search. When searching by ID, the
+order of rows returned is the same as the passed IDs, IDs not found represented
+by empty rows.
 """
-function search_places(; placename::Regex=r"", region::Regex=r"", subregion::Regex=r"", municipality::Regex=r"", ids::Vector{Int32})
+function search_places(; placename::Regex=r"", region::Regex=r"", subregion::Regex=r"", municipality::Regex=r"", ids::Vector{Int32}=Int32[])
 
     # maybe a better way to do it than this, but using subset() took
     # much longer, funnily
@@ -66,12 +102,35 @@ function closest(to, candidates)
     return sortperm(GO.distance.([to], candidates))
 end
 
+
+"""
+Find the roads that are closest to `location`.
+
+`location` should be a row such as returned by [`search_places`](@ref).
+"""
+function closest_roads(location)
+    # TODO: change to also including roads that surround current municipality
+    muni_road_ids = subset_by_id(road_municipality_intersect(), :municipality_id => [location.municipality]).road_id
+    muni_roads = DF.innerjoin(roads(), DF.DataFrame([:OBJECTID => muni_road_ids]), on=:OBJECTID)
+
+    return muni_roads[closest(location.geometry, muni_roads.geometry), :]
+end
+
+"""
+Subset the dataframe `df` by the given ids in `cols`.
+"""
+function subset_by_id(df::DF.DataFrame, cols::Pair{Symbol,Vector{N}}...) where N
+
+    return DF.innerjoin(df, DF.DataFrame([cols...]), on=[col.first for col in cols])
+
+end
+
 """
 Calculate the intersections of the geometries passed. `with` is the geometry
 against which the geometries in the iterable `geoms` are compared.
 """
 function intersects(with, geoms)
-    return [GO.intersects(g, with) for g in geoms]
+    return GO.intersects.(geoms, [with])
 end
 
 
@@ -159,6 +218,10 @@ function road_municipality_intersect()
     return _data.road_municipality_intersect
 end
 
+"""
+Return a dataframe of road intersections. Column `id1` is a road id,
+and column `id2` has the IDs of roads it intersects with.
+"""
 function road_intersections()
     parquet_file = "data/road_intersections.parquet"
     if !isfile(parquet_file)
@@ -280,27 +343,19 @@ end
 
 function plot_country(ax::Axis)
     plot!(ax, country().geometry; color="#f5deb366", strokecolor="#000F", strokewidth=1)
-    xlims!(ax, [-1e6, 1.5e6])
+    _set_lims!(ax)
 end
 
 @enumx _PlotOption begin
-    places
     municipality
     region
 end
 
-function _plot(ax::Axis, options::Vector=[instances(_PlotOption.T)...])
+function _plot(ax::Axis; options::Vector=[instances(_PlotOption.T)...])
 
     empty!(ax)
 
     plot_country(ax)
-
-    if _PlotOption.places in options
-        tur_hel = search_places(ids=[TURKU_ID, HELSINKI_ID]).geometry
-
-        plot!(ax, tur_hel[1])
-        plot!(ax, tur_hel[2])
-    end
 
     if _PlotOption.municipality in options
         plot!(ax, municipality_geom().geometry; color="#0000", strokecolor="#0a0f", strokewidth=1)
@@ -308,4 +363,9 @@ function _plot(ax::Axis, options::Vector=[instances(_PlotOption.T)...])
     if _PlotOption.region in options
         plot!(ax, regions_geom().geometry; color="#0000", strokecolor="#00fa", strokewidth=1)
     end
+end
+
+function _set_lims!(ax)
+    ylims!(ax, [6.55e6, 7.8e6])
+    xlims!(ax, [-1e6, 1.5e6])
 end
