@@ -26,22 +26,24 @@ function plot_route!(ax::Axis, start, destination)
 end
 
 const PathfindResult = @NamedTuple{path::DF.DataFrame, destination_id::Int32, found::Bool}
-# Could do with a dataframe: add roads with own id, parent id, and checked
+
+# add roads with own id, parent id, and checked
 # status. For the lowest non-checked, find all intersecting, add to end
 # of dataframe (in descending order based on how close road is to destination,
 # such that the closest road is lowest), repeat until hopefully finding destination road. If
 # destination road is found, go back up its ID chain to top.
-
 """
 Find a path between `start` and `destination`. These should rows as
 returned by [`search_places`](@ref).
+
+See also: [`get_path`](@ref).
 """
 function pathfind(start::DF.DataFrameRow, destination::DF.DataFrameRow)::PathfindResult
 
     road_chain = DF.DataFrame(id=Int[], parent_id=Union{Int,Nothing}[], checked=Bool[])
 
     start_roads = closest_roads(start)
-    road_chain = vcat(road_chain, DF.DataFrame([:id => start_roads[1, :OBJECTID], :parent_id => nothing, :checked => false]))
+    road_chain = vcat(road_chain, DF.DataFrame([:id => start_roads[end:-1:1, :OBJECTID], :parent_id => nothing, :checked => false]))
     destination_road = closest_roads(destination)[1, :]
     max_iter = 10000
     curr_iter = 1
@@ -49,19 +51,26 @@ function pathfind(start::DF.DataFrameRow, destination::DF.DataFrameRow)::Pathfin
 
     path_found = false
     while curr_iter <= max_iter
-        not_checked = subset_by_id(road_chain, :checked => [false], order=:left)
+        not_checked = road_chain[.!road_chain.checked, :]
         if size(not_checked)[1] == 0
             break
         end
         current_road = not_checked[end, :]
         road_chain[road_chain.id.==current_road.id, :checked] = [true]
         current_intersecting = subset_by_id(rd_inter, :id2 => [current_road.id])
-        # remove roads that are already in the considered roads
-        current_intersecting = DF.antijoin(current_intersecting, road_chain, on=:OBJECTID => :id)
+        # remove roads that have already been considered from further
+        # consideration
+        current_intersecting = DF.antijoin(current_intersecting, road_chain[road_chain.checked, :], on=:OBJECTID => :id)
 
         if size(current_intersecting)[1] == 0
             continue
         end
+
+        # remove roads that intersect the current one from elsewhere
+        # in roads to be checked. These roads are added back below
+        # but at the end of the dataframe. Basically moving these
+        # roads up in priority, though also changing their parent id.
+        road_chain = DF.antijoin(road_chain, current_intersecting, on=:id => :OBJECTID)
 
         # add in reverse so that closest can be found at the end
         current_intersecting = current_intersecting[closest(destination.geometry, current_intersecting.geometry)[end:-1:1], :]
