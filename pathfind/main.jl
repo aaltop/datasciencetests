@@ -17,10 +17,10 @@ _data = _Data()
 
 function plot_route!(ax::Axis, start, destination)
 
-    route = subset_by_id(roads(), :OBJECTID => get_path(pathfind(start, destination)), order=:right)
     _plot(ax, options=[])
     plot!(ax, start.geometry)
     plot!(ax, destination.geometry)
+    route = subset_by_id(roads(), :OBJECTID => get_path(pathfind(start, destination)), order=:right)
     plot!(ax, route.geometry)
 
 end
@@ -45,52 +45,64 @@ function pathfind(start::DF.DataFrameRow, destination::DF.DataFrameRow)::Pathfin
     start_roads = closest_roads(start)
     road_chain = vcat(road_chain, DF.DataFrame([:id => start_roads[end:-1:1, :OBJECTID], :parent_id => nothing, :checked => false]))
     destination_road = closest_roads(destination)[1, :]
-    max_iter = 10000
+    max_iter = 1000
     curr_iter = 1
     rd_inter = DF.innerjoin(roads(), road_intersections(), on=:OBJECTID => :id1)
 
     path_found = false
     while curr_iter <= max_iter
+        curr_iter += 1
         not_checked = road_chain[.!road_chain.checked, :]
         if size(not_checked)[1] == 0
             break
         end
         current_road = not_checked[end, :]
-        road_chain[road_chain.id.==current_road.id, :checked] = [true]
+        # set ALL roads with the current ID to checked, regardless of what
+        # their parent_id is (checked meaning that this road's intersections
+        # will have been introduced to the list)
+        road_chain[road_chain.id.==current_road.id, :checked] .= true
         current_intersecting = subset_by_id(rd_inter, :id2 => [current_road.id])
-        # remove roads that have already been considered from further
-        # consideration
-        current_intersecting = DF.antijoin(current_intersecting, road_chain[road_chain.checked, :], on=:OBJECTID => :id)
 
         if size(current_intersecting)[1] == 0
             continue
         end
 
-        # remove roads that intersect the current one from elsewhere
-        # in roads to be checked. These roads are added back below
-        # but at the end of the dataframe. Basically moving these
-        # roads up in priority, though also changing their parent id.
-        road_chain = DF.antijoin(road_chain, current_intersecting, on=:id => :OBJECTID)
-
         # add in reverse so that closest can be found at the end
         current_intersecting = current_intersecting[closest(destination.geometry, current_intersecting.geometry)[end:-1:1], :]
-        road_chain = vcat(road_chain, DF.DataFrame([:id => current_intersecting.OBJECTID, :parent_id => current_road.id, :checked => false]))
+        # find the check status of each road; some roads might have already
+        # been checked, but all roads from this intersection should also
+        # be added because they would create a different path based on
+        # their parent_id.
+        current_intersecting_checked = DF.leftjoin(current_intersecting, unique(DF.select(road_chain, :id, :checked)), on=:OBJECTID => :id, order=:left).checked
+        # println(current_intersecting, current_intersecting_checked)
+        # println(current_road.id, subset_by_id(unique(DF.select(road_chain, :id, :checked)), :id => [32]))
+        # if it's missing, wasn't in `road_chain`, so checked status is false
+        current_intersecting_checked = coalesce.(current_intersecting_checked, false)
+
+        road_chain = vcat(road_chain, DF.DataFrame([
+            :id => current_intersecting.OBJECTID,
+            :parent_id => current_road.id,
+            :checked => current_intersecting_checked
+        ]))
+
         if destination_road.OBJECTID in current_intersecting.OBJECTID
+            road_chain[road_chain.id.==destination_road.OBJECTID, :checked] .= true
             path_found = true
-            break
         end
     end
     return PathfindResult((; path=road_chain, destination_id=destination_road.OBJECTID, found=path_found))
 end
 
 """
-Get the path (sequence of road IDs) from `pathfind_result` if a path
+Get the paths (sequences of road IDs) from `pathfind_result` if a path
 was found.
+
+See also: [`pathfind`](@ref).
 """
-function get_path(pathfind_result::PathfindResult)
+function get_path(pathfind_result::PathfindResult)::Vector{Int}
 
     if !pathfind_result.found
-        return []
+        return Int[]
     end
 
     paths, destination_id = pathfind_result.path, pathfind_result.destination_id
