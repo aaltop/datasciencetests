@@ -17,36 +17,85 @@ _data = _Data()
 
 function plot_route!(ax::Axis, start, destination)
 
-    route = pathfind(start, destination)
+    route = subset_by_id(roads(), :OBJECTID => get_path(pathfind(start, destination)), order=:right)
+    _plot(ax, options=[])
     plot!(ax, start.geometry)
     plot!(ax, destination.geometry)
     plot!(ax, route.geometry)
 
 end
 
-function pathfind(start, destination)
+const PathfindResult = @NamedTuple{path::DF.DataFrame, destination_id::Int32, found::Bool}
+# Could do with a dataframe: add roads with own id, parent id, and checked
+# status. For the lowest non-checked, find all intersecting, add to end
+# of dataframe (in descending order based on how close road is to destination,
+# such that the closest road is lowest), repeat until hopefully finding destination road. If
+# destination road is found, go back up its ID chain to top.
+
+"""
+Find a path between `start` and `destination`. These should rows as
+returned by [`search_places`](@ref).
+"""
+function pathfind(start::DF.DataFrameRow, destination::DF.DataFrameRow)::PathfindResult
+
+    road_chain = DF.DataFrame(id=Int[], parent_id=Union{Int,Nothing}[], checked=Bool[])
 
     start_roads = closest_roads(start)
+    road_chain = vcat(road_chain, DF.DataFrame([:id => start_roads[1, :OBJECTID], :parent_id => nothing, :checked => false]))
+    destination_road = closest_roads(destination)[1, :]
     max_iter = 10000
     curr_iter = 1
-    rd_inter = road_intersections()
-    path_ = [start_roads[1, :]]
+    rd_inter = DF.innerjoin(roads(), road_intersections(), on=:OBJECTID => :id1)
+
+    path_found = false
     while curr_iter <= max_iter
-        current_intersecting_id = subset_by_id(rd_inter, :id1 => [path_[end].OBJECTID]).id2
-        current_intersecting = subset_by_id(roads(), :OBJECTID => current_intersecting_id)
-        closest_roads_ = current_intersecting[closest(destination.geometry, current_intersecting.geometry), :]
-
-        next_road = closest_roads_[1, :]
-
-        # if previous found road is closer (or as close) as the new
-        # one, assume as close as possible (might not be the case, however)
-        if closest(destination.geometry, [path_[end].geometry, next_road.geometry]) == [1, 2]
+        not_checked = subset_by_id(road_chain, :checked => [false], order=:left)
+        if size(not_checked)[1] == 0
             break
         end
-        push!(path_, next_road)
-        curr_iter += 1
+        current_road = not_checked[end, :]
+        road_chain[road_chain.id.==current_road.id, :checked] = [true]
+        current_intersecting = subset_by_id(rd_inter, :id2 => [current_road.id])
+        # remove roads that are already in the considered roads
+        current_intersecting = DF.antijoin(current_intersecting, road_chain, on=:OBJECTID => :id)
+
+        if size(current_intersecting)[1] == 0
+            continue
+        end
+
+        # add in reverse so that closest can be found at the end
+        current_intersecting = current_intersecting[closest(destination.geometry, current_intersecting.geometry)[end:-1:1], :]
+        road_chain = vcat(road_chain, DF.DataFrame([:id => current_intersecting.OBJECTID, :parent_id => current_road.id, :checked => false]))
+        if destination_road.OBJECTID in current_intersecting.OBJECTID
+            path_found = true
+            break
+        end
     end
-    return DF.DataFrame(path_)
+    return PathfindResult((; path=road_chain, destination_id=destination_road.OBJECTID, found=path_found))
+end
+
+"""
+Get the path (sequence of road IDs) from `pathfind_result` if a path
+was found.
+"""
+function get_path(pathfind_result::PathfindResult)
+
+    if !pathfind_result.found
+        return []
+    end
+
+    paths, destination_id = pathfind_result.path, pathfind_result.destination_id
+    path_road_ids = [destination_id]
+    while true
+
+        next_id = paths[paths.id.==path_road_ids[end], :parent_id][1]
+        if isnothing(next_id)
+            break
+        end
+        push!(path_road_ids, next_id)
+
+    end
+    return reverse(path_road_ids)
 end
 
 """
@@ -118,10 +167,13 @@ end
 
 """
 Subset the dataframe `df` by the given ids in `cols`.
-"""
-function subset_by_id(df::DF.DataFrame, cols::Pair{Symbol,Vector{N}}...) where N
 
-    return DF.innerjoin(df, DF.DataFrame([cols...]), on=[col.first for col in cols])
+`order` allows determining the row ordering of the result, as for
+DataFrame joins.
+"""
+function subset_by_id(df::DF.DataFrame, cols::Pair{Symbol,Vector{N}}...; order=:undefined) where N
+
+    return DF.innerjoin(df, DF.DataFrame([cols...]), on=[col.first for col in cols], order=order)
 
 end
 
