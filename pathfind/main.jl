@@ -40,10 +40,37 @@ See also: [`get_path`](@ref).
 """
 function pathfind(start::DF.DataFrameRow, destination::DF.DataFrameRow)::PathfindResult
 
-    road_chain = DF.DataFrame(id=Int[], parent_id=Union{Int,Nothing}[], checked=Bool[])
+    road_chain = DF.DataFrame(id=Int[], parent_id=Union{Int,Nothing}[], score=Float32[], path_score=Float64[], checked=Bool[])
 
-    start_roads = closest_roads(start)
-    road_chain = vcat(road_chain, DF.DataFrame([:id => start_roads[end:-1:1, :OBJECTID], :parent_id => nothing, :checked => false]))
+    """
+    Calculate scores for roads based on start and destination. Higher
+    score is better.
+    """
+    function score(start::DF.DataFrameRow, destination::DF.DataFrameRow, roads::DF.DataFrame)
+        return -GO.distance.([destination.geometry], roads.geometry)
+    end
+
+    # Using just the closest road to our start point, because ensuring
+    # that the path actually makes it back to the road closest to the
+    # start point is more difficult if all roads close to the starting point
+    # are considered as starting roads. In most cases, probably fine,
+    # but could also be that that road actually doesn't connect to
+    # the wider road network, so a path cannot be found at all. It might
+    # also be wiser to find the road that is closest to the staring point
+    # while also being in the direction of the destination point.
+    start_roads = closest_roads(start)[[1], :]
+    start_roads.score = [0]
+
+    road_chain = vcat(
+        road_chain,
+        DF.DataFrame([
+            :id => start_roads.OBJECTID,
+            :parent_id => nothing,
+            :score => start_roads.score,
+            :path_score => start_roads.score,
+            :checked => false
+        ])
+    )
     destination_road = closest_roads(destination)[1, :]
     max_iter = 1000
     curr_iter = 1
@@ -67,21 +94,33 @@ function pathfind(start::DF.DataFrameRow, destination::DF.DataFrameRow)::Pathfin
             continue
         end
 
-        # add in reverse so that closest can be found at the end
-        current_intersecting = current_intersecting[closest(destination.geometry, current_intersecting.geometry)[end:-1:1], :]
+        # NOTE: as-is here, the score could be calculated in advance,
+        # but the idea is to allow to define the road from
+        # which we're coming onto these roads here, and have the score
+        # depend on that (e.g. would we be going the wrong way down a
+        # one way road if we were to turn onto one of these,
+        # in which case the score would have to be -Inf)
+        current_intersecting.score = score(start, destination, current_intersecting)
+        # highest score at the end
+        current_intersecting = current_intersecting[sortperm(current_intersecting.score), :]
         # find the check status of each road; some roads might have already
         # been checked, but all roads from this intersection should also
         # be added because they would create a different path based on
         # their parent_id.
-        current_intersecting_checked = DF.leftjoin(current_intersecting, unique(DF.select(road_chain, :id, :checked)), on=:OBJECTID => :id, order=:left).checked
-        # println(current_intersecting, current_intersecting_checked)
-        # println(current_road.id, subset_by_id(unique(DF.select(road_chain, :id, :checked)), :id => [32]))
+        current_intersecting_checked = DF.leftjoin(
+            current_intersecting,
+            unique(DF.select(road_chain, :id, :checked)),
+            on=:OBJECTID => :id,
+            order=:left
+        ).checked
         # if it's missing, wasn't in `road_chain`, so checked status is false
         current_intersecting_checked = coalesce.(current_intersecting_checked, false)
 
         road_chain = vcat(road_chain, DF.DataFrame([
             :id => current_intersecting.OBJECTID,
             :parent_id => current_road.id,
+            :score => current_intersecting.score,
+            :path_score => current_intersecting.score .+ current_road.path_score,
             :checked => current_intersecting_checked
         ]))
 
@@ -109,7 +148,9 @@ function get_path(pathfind_result::PathfindResult)::Vector{Int}
     path_road_ids = [destination_id]
     while true
 
-        next_id = paths[paths.id.==path_road_ids[end], :parent_id][1]
+        next_roads = paths[paths.id.==path_road_ids[end], :]
+        next_id = next_roads[sortperm(next_roads.path_score), :parent_id][end]
+
         if isnothing(next_id)
             break
         end
@@ -179,11 +220,21 @@ Find the roads that are closest to `location`.
 `location` should be a row such as returned by [`search_places`](@ref).
 """
 function closest_roads(location)
-    # TODO: change to also including roads that surround current municipality
-    muni_road_ids = subset_by_id(road_municipality_intersect(), :municipality_id => [location.municipality]).road_id
-    muni_roads = DF.innerjoin(roads(), DF.DataFrame([:OBJECTID => muni_road_ids]), on=:OBJECTID)
+    muni_roads = municipality_roads(location)
 
     return muni_roads[closest(location.geometry, muni_roads.geometry), :]
+end
+
+"""
+Find the roads that are in the same municipality as `location`.
+
+`location` should be a row such as returned by [`search_places`](@ref).
+"""
+function municipality_roads(location)
+    # TODO: allow including neighboring municipalities?
+    muni_road_ids = subset_by_id(road_municipality_intersect(), :municipality_id => [location.municipality]).road_id
+    muni_roads = DF.innerjoin(roads(), DF.DataFrame([:OBJECTID => muni_road_ids]), on=:OBJECTID)
+    return muni_roads
 end
 
 """
