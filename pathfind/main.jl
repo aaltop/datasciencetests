@@ -9,30 +9,38 @@ using EnumX
 
 include("src/data.jl")
 include("src/geom.jl")
+include("src/scoring.jl")
 
 const TURKU_ID = Int32(40294758)
 const HELSINKI_ID = Int32(40342733)
 
 _data = _Data()
 
-function plot_route!(ax::Axis, start, destination)
+function plot_route!(ax::Axis, start, destination; score::Vector{Pair{String,Function}}=Vector{Pair{String,Function}}["default"=>scoring.score])
+
 
     _plot(ax, options=[])
+    remove_legends!(ax.parent)
     plot!(ax, start.geometry)
     plot!(ax, destination.geometry)
-    route_road_ids = get_path(pathfind(start, destination))
-    route = subset_by_id(roads(), :OBJECTID => route_road_ids, order=:right)
+    for (func_name, func) in score
+        route_road_ids = get_path(pathfind(start, destination, score=func))
+        route = subset_by_id(roads(), :OBJECTID => route_road_ids, order=:right)
 
-    # find and plot also some roads that intersect with the found path
-    # to get an idea of how good the path might be
-    route_intersects_ids = subset_by_id(road_intersections(), :id1 => route_road_ids).id2
-    route_intersects_ids = vcat(route_intersects_ids, subset_by_id(road_intersections(), :id1 => route_intersects_ids).id2)
-    route_intersects_ids = setdiff(unique(route_intersects_ids), route.OBJECTID)
-    route_intersects = subset_by_id(roads(), :OBJECTID => route_intersects_ids)
-    plot!(ax, route_intersects.geometry; color="#0f05")
+        if length(score) == 1
+            # find and plot also some roads that intersect with the found path
+            # to get an idea of how good the path might be
+            route_intersects_ids = subset_by_id(road_intersections(), :id1 => route_road_ids).id2
+            route_intersects_ids = vcat(route_intersects_ids, subset_by_id(road_intersections(), :id1 => route_intersects_ids).id2)
+            route_intersects_ids = setdiff(unique(route_intersects_ids), route.OBJECTID)
+            route_intersects = subset_by_id(roads(), :OBJECTID => route_intersects_ids)
+            plot!(ax, route_intersects.geometry; color="#0f05")
+        end
 
-    plot!(ax, route.geometry)
-
+        plot!(ax, route.geometry, label=func_name)
+    end
+    axislegend(ax)
+    return nothing
 end
 
 const PathfindResult = @NamedTuple{path::DF.DataFrame, destination_id::Int32, found::Bool}
@@ -48,76 +56,17 @@ returned by [`search_places`](@ref).
 
 See also: [`get_path`](@ref).
 """
-function pathfind(start::DF.DataFrameRow, destination::DF.DataFrameRow)::PathfindResult
+function pathfind(start::DF.DataFrameRow, destination::DF.DataFrameRow; score::Function=scoring.score)::PathfindResult
 
-    road_chain = DF.DataFrame(id=Int[], parent_id=Union{Int,Nothing}[], score=Float32[], path_score=Float64[], checked=Bool[])
-
-    """
-    Calculate scores for roads based on start and destination. Higher
-    score is better.
-    """
-    function score(start::DF.DataFrameRow, destination::DF.DataFrameRow, prev_road::DF.DataFrameRow, candidate_roads::DF.DataFrame)
-        # the optimal road, in terms of pure distance, would be the one
-        # that gets us closest to our destination with the shortest
-        # road length. If the road length is L, and it gets us S closer
-        # to our destination, 1 <= L/S < ∞ for S > 0 and -∞ < L/S <= -1 for
-        # S < 0. Generally, L/S == 1 is optimal, with S > 0 and L/S -> ∞
-        # being worse, while for S < 0, L/S == -1 is worst (as we want
-        # to go as little in the wrong direction), with L/S -> -∞ being
-        # better. However, it would clearly also be useful to encode
-        # the actual distance S on its own in the score, as L/S -> -∞
-        # could still mean a large negative S.
-
-
-        # Distance is *probably* the distance between the closest points
-        # of the two geometries, need to check this out. if so, simply
-        # calculating it like this won't work: if a road curves, say a
-        # overall u-turn, the closest it might be could be in the middle
-        # of the road, whereas the actual exit from that road might
-        # be further away:
-        #   
-        #   v-- entrance
-        #   -------
-        #         |
-        #         |<-- "closest" point (no intersecting road) ### destination --> x
-        #         |
-        #   -------
-        #   ^-- exit
-        #
-        # Equally, a road can have multiple exits, and maybe the road
-        # *does* have an exit at the middle of the u-turn. What would
-        # actually need to be done is to find the intersection points
-        # of each road with its intersecting roads, and find the closest
-        # of these to the destination. Still, this should be enough
-        # for now, for purposes of testing.
-
-        # make sure that these are actually the same scale (same units)
-        S = GO.distance(destination.geometry, prev_road.geometry) .- GO.distance.([destination.geometry], candidate_roads.geometry)
-        L = candidate_roads.AJR_PITUUS
-
-        # TODO: add start -> destination direction somehow? Reward paths
-        # that stay close to that beeline path; only checking current
-        # road -> next road might suffer from the locality.
-
-        # use logarithm?
-        _score = L ./ S
-        # limit the score a little. L/S >= 1000 is already a massive
-        # difference, so fair enough to limit, arguably.
-        _score = ifelse.(abs.(_score) .> 1e3, sign.(_score) * 1e3, _score)
-        _score_positive_mask = _score .> 0
-        # ensure that negative scores are all lower than positive ones,
-        # and that positive but large scores are lower than positive but
-        # small scores:
-        # 
-        # max(neg) - max(pos) < -max(pos) for x > 0 because global max(neg) == -1,
-        # so max(neg) < -max(pos) + max(pos) == 0, which is identically true.
-        # Further, min(neg) <= max(neg), and -max(pos) <= -min(pos).
-        # (neg = negative scores, pos = positive scores)
-        _score[_score.<0] .-= maximum(_score[_score_positive_mask], init=1.0)
-        _score[_score_positive_mask] .*= -1
-
-        return _score
-    end
+    road_chain = DF.DataFrame(
+        id=Int[],
+        parent_id=Union{Int,Nothing}[],
+        score=Float32[],
+        path_score=Float64[],
+        distance=Float32[],
+        path_length=Float64[],
+        checked=Bool[]
+    )
 
     # Using just the closest road to our start point, because ensuring
     # that the path actually makes it back to the road closest to the
@@ -130,6 +79,7 @@ function pathfind(start::DF.DataFrameRow, destination::DF.DataFrameRow)::Pathfin
     start_roads = closest_roads(start)[[1], :]
     start_roads.score = [0]
 
+    starting_distance = GO.distance(start_roads.geometry, destination.geometry)
     road_chain = vcat(
         road_chain,
         DF.DataFrame([
@@ -137,6 +87,8 @@ function pathfind(start::DF.DataFrameRow, destination::DF.DataFrameRow)::Pathfin
             :parent_id => nothing,
             :score => start_roads.score,
             :path_score => start_roads.score,
+            :distance => starting_distance,
+            :path_length => start_roads.AJR_PITUUS,
             :checked => false
         ])
     )
@@ -145,12 +97,21 @@ function pathfind(start::DF.DataFrameRow, destination::DF.DataFrameRow)::Pathfin
     curr_iter = 1
     rd_inter = DF.innerjoin(roads(), road_intersections(), on=:OBJECTID => :id1)
 
+
     path_found = false
     while curr_iter <= max_iter
         curr_iter += 1
+
         not_checked = road_chain[.!road_chain.checked, :]
         if size(not_checked)[1] == 0
             break
+        end
+
+        if path_found
+            # once a path is found, use gathered info to pick other paths
+            # to test: with this heuristic, the closer a road is and
+            # the shorter its path thus far, the better the candidate
+            not_checked = not_checked[sortperm(not_checked.distance .* not_checked.path_length, rev=true), :]
         end
         current_road = not_checked[end, :]
         # set ALL roads with the current ID to checked, regardless of what
@@ -163,12 +124,6 @@ function pathfind(start::DF.DataFrameRow, destination::DF.DataFrameRow)::Pathfin
             continue
         end
 
-        # NOTE: as-is here, the score could be calculated in advance,
-        # but the idea is to allow to define the road from
-        # which we're coming onto these roads here, and have the score
-        # depend on that (e.g. would we be going the wrong way down a
-        # one way road if we were to turn onto one of these,
-        # in which case the score would have to be -Inf)
         current_intersecting.score = score(start, destination, rd_inter[rd_inter.OBJECTID.==current_road.id, :][1, :], current_intersecting)
         # highest score at the end
         current_intersecting = current_intersecting[sortperm(current_intersecting.score), :]
@@ -190,6 +145,8 @@ function pathfind(start::DF.DataFrameRow, destination::DF.DataFrameRow)::Pathfin
             :parent_id => current_road.id,
             :score => current_intersecting.score,
             :path_score => current_intersecting.score .+ current_road.path_score,
+            :distance => GO.distance.([destination.geometry], current_intersecting.geometry),
+            :path_length => current_intersecting.AJR_PITUUS .+ current_road.path_length,
             :checked => current_intersecting_checked
         ]))
 
@@ -218,7 +175,7 @@ function get_path(pathfind_result::PathfindResult)::Vector{Int}
     while true
 
         next_roads = paths[paths.id.==path_road_ids[end], :]
-        next_id = next_roads[sortperm(next_roads.path_score), :parent_id][end]
+        next_id = next_roads[sortperm(next_roads.path_length), :parent_id][1]
 
         if isnothing(next_id)
             break
@@ -561,4 +518,8 @@ end
 function _set_lims!(ax)
     ylims!(ax, [6.55e6, 7.8e6])
     xlims!(ax, [-1e6, 1.5e6])
+end
+
+function remove_legends!(fig::Figure)
+    foreach(delete!, filter(x -> isa(x, Legend), fig.content))
 end
