@@ -20,7 +20,17 @@ function plot_route!(ax::Axis, start, destination)
     _plot(ax, options=[])
     plot!(ax, start.geometry)
     plot!(ax, destination.geometry)
-    route = subset_by_id(roads(), :OBJECTID => get_path(pathfind(start, destination)), order=:right)
+    route_road_ids = get_path(pathfind(start, destination))
+    route = subset_by_id(roads(), :OBJECTID => route_road_ids, order=:right)
+
+    # find and plot also some roads that intersect with the found path
+    # to get an idea of how good the path might be
+    route_intersects_ids = subset_by_id(road_intersections(), :id1 => route_road_ids).id2
+    route_intersects_ids = vcat(route_intersects_ids, subset_by_id(road_intersections(), :id1 => route_intersects_ids).id2)
+    route_intersects_ids = setdiff(unique(route_intersects_ids), route.OBJECTID)
+    route_intersects = subset_by_id(roads(), :OBJECTID => route_intersects_ids)
+    plot!(ax, route_intersects.geometry; color="#0f05")
+
     plot!(ax, route.geometry)
 
 end
@@ -46,8 +56,67 @@ function pathfind(start::DF.DataFrameRow, destination::DF.DataFrameRow)::Pathfin
     Calculate scores for roads based on start and destination. Higher
     score is better.
     """
-    function score(start::DF.DataFrameRow, destination::DF.DataFrameRow, roads::DF.DataFrame)
-        return -GO.distance.([destination.geometry], roads.geometry)
+    function score(start::DF.DataFrameRow, destination::DF.DataFrameRow, prev_road::DF.DataFrameRow, candidate_roads::DF.DataFrame)
+        # the optimal road, in terms of pure distance, would be the one
+        # that gets us closest to our destination with the shortest
+        # road length. If the road length is L, and it gets us S closer
+        # to our destination, 1 <= L/S < ∞ for S > 0 and -∞ < L/S <= -1 for
+        # S < 0. Generally, L/S == 1 is optimal, with S > 0 and L/S -> ∞
+        # being worse, while for S < 0, L/S == -1 is worst (as we want
+        # to go as little in the wrong direction), with L/S -> -∞ being
+        # better. However, it would clearly also be useful to encode
+        # the actual distance S on its own in the score, as L/S -> -∞
+        # could still mean a large negative S.
+
+
+        # Distance is *probably* the distance between the closest points
+        # of the two geometries, need to check this out. if so, simply
+        # calculating it like this won't work: if a road curves, say a
+        # overall u-turn, the closest it might be could be in the middle
+        # of the road, whereas the actual exit from that road might
+        # be further away:
+        #   
+        #   v-- entrance
+        #   -------
+        #         |
+        #         |<-- "closest" point (no intersecting road) ### destination --> x
+        #         |
+        #   -------
+        #   ^-- exit
+        #
+        # Equally, a road can have multiple exits, and maybe the road
+        # *does* have an exit at the middle of the u-turn. What would
+        # actually need to be done is to find the intersection points
+        # of each road with its intersecting roads, and find the closest
+        # of these to the destination. Still, this should be enough
+        # for now, for purposes of testing.
+
+        # make sure that these are actually the same scale (same units)
+        S = GO.distance(destination.geometry, prev_road.geometry) .- GO.distance.([destination.geometry], candidate_roads.geometry)
+        L = candidate_roads.AJR_PITUUS
+
+        # TODO: add start -> destination direction somehow? Reward paths
+        # that stay close to that beeline path; only checking current
+        # road -> next road might suffer from the locality.
+
+        # use logarithm?
+        _score = L ./ S
+        # limit the score a little. L/S >= 1000 is already a massive
+        # difference, so fair enough to limit, arguably.
+        _score = ifelse.(abs.(_score) .> 1e3, sign.(_score) * 1e3, _score)
+        _score_positive_mask = _score .> 0
+        # ensure that negative scores are all lower than positive ones,
+        # and that positive but large scores are lower than positive but
+        # small scores:
+        # 
+        # max(neg) - max(pos) < -max(pos) for x > 0 because global max(neg) == -1,
+        # so max(neg) < -max(pos) + max(pos) == 0, which is identically true.
+        # Further, min(neg) <= max(neg), and -max(pos) <= -min(pos).
+        # (neg = negative scores, pos = positive scores)
+        _score[_score.<0] .-= maximum(_score[_score_positive_mask], init=1.0)
+        _score[_score_positive_mask] .*= -1
+
+        return _score
     end
 
     # Using just the closest road to our start point, because ensuring
@@ -100,7 +169,7 @@ function pathfind(start::DF.DataFrameRow, destination::DF.DataFrameRow)::Pathfin
         # depend on that (e.g. would we be going the wrong way down a
         # one way road if we were to turn onto one of these,
         # in which case the score would have to be -Inf)
-        current_intersecting.score = score(start, destination, current_intersecting)
+        current_intersecting.score = score(start, destination, rd_inter[rd_inter.OBJECTID.==current_road.id, :][1, :], current_intersecting)
         # highest score at the end
         current_intersecting = current_intersecting[sortperm(current_intersecting.score), :]
         # find the check status of each road; some roads might have already
