@@ -269,18 +269,30 @@ Subset the dataframe `df` by the given ids in `cols`.
 `order` allows determining the row ordering of the result, as for
 DataFrame joins.
 """
-function subset_by_id(df::DF.DataFrame, cols::Pair{Symbol,Vector{N}}...; order=:undefined) where N
+function subset_by_id(df, cols::Pair{Symbol,Vector{N}}...; order=:undefined) where N
 
     return DF.innerjoin(df, DF.DataFrame([cols...]), on=[col.first for col in cols], order=order)
 
 end
 
 """
-Calculate the intersections of the geometries passed. `with` is the geometry
+Calculate whether the passed geometries intersect. `with` is the geometry
 against which the geometries in the iterable `geoms` are compared.
 """
 function intersects(with, geoms)
     return GO.intersects.(geoms, [with])
+end
+
+"""
+Calculate the intersection points of the passed geometries. `with` is
+the geometry against which the geometries in the iterable `geoms` are
+compared.
+
+Returns a vector of vector of tuples, where each tuple represents an
+intersection point.
+"""
+function intersection(with, geoms)
+    return GO.intersection.([with], geoms, target=GI.PointTrait())
 end
 
 
@@ -368,6 +380,63 @@ function road_municipality_intersect()
     return _data.road_municipality_intersect
 end
 
+function road_intersection_points()
+    parquet_file = "data/road_intersection_points.parquet"
+    if !isfile(parquet_file)
+        # TODO: figure out bidirectionality
+        GDF.write(parquet_file, _road_intersection_points(roads(), road_intersections()))
+    end
+    df = GDF.read(parquet_file)
+    df.geometry = GI.Point.(df.geometry)
+    return df
+
+end
+
+function _road_intersection_points(road_df, road_intersection_df)
+
+    roads_to_consider = intersect(unique(road_intersection_df.id1), road_df.OBJECTID)
+
+    road_lines = [GI.LineString([(r.points[i].x, r.points[i].y, r.zvalues[i]) for i in 1:length(r.points)]) for r in road_df.geometry]
+    lines_df = DF.DataFrame([:id => road_df.OBJECTID, :lines => road_lines])
+    all_lines_df = DF.select(DF.innerjoin(road_intersection_df, lines_df, on=:id1 => :id), :id1, :id2, :lines => :lines1)
+    all_lines_df = DF.select(DF.innerjoin(all_lines_df, lines_df, on=:id2 => :id), :id1, :id2, :lines1, :lines => :lines2)
+    intersection_points = DF.DataFrame([:id1 => Int64[], :id2 => Int64[], :geometry => GI.Point[]])
+
+    n = length(roads_to_consider)
+
+    id_groups = DF.groupby(all_lines_df, :id1)
+    println("Calculating road intersections points...")
+    for (i, gr) in enumerate(id_groups)
+        id1 = gr.id1[1]
+        if (i % 10 == 0)
+            print("\r")
+            print("road $i/$n")
+        end
+
+        # don't recalculate intersections
+        current_roads = subset_by_id(gr, :id2 => setdiff(gr.id2, intersection_points.id1))
+
+        if size(current_roads)[1] < 1
+            continue
+        end
+
+        inter = intersection(current_roads.lines1[1], current_roads.lines2)
+        for (id2, inter_points) in zip(current_roads.id2, inter)
+            intersection_points = vcat(intersection_points, DF.DataFrame([:id1 => id1, :id2 => id2, :geometry => GI.Point.(inter_points)]))
+        end
+    end
+
+    intersection_points.id1 = Int64.(intersection_points.id1)
+    intersection_points.id2 = Int64.(intersection_points.id2)
+
+    # make bidirectional so that the intersections of a given road
+    # can be found by simply subsetting one of the ID columns
+    intersection_points = vcat(intersection_points, DF.rename(intersection_points, :id1 => :id2, :id2 => :id1))
+
+    return intersection_points
+
+end
+
 """
 Return a dataframe of road intersections. Column `id1` is a road id,
 and column `id2` has the IDs of roads it intersects with.
@@ -451,7 +520,9 @@ end
 """
 Calculate a bidirectional associative table. The table is assumed to
 be an associative one, where IDs in column 1 (id1) are mapped to IDs
-in column 2 (id2). "Bidirectional" here means that any relation of a particular
+in column 2 (id2).
+
+"Bidirectional" here means that any relation of a particular
 ID in id1 and id2 is is added to id1, such that to find the associations
 of that ID, it is only necessary to filter based on that ID in either of
 the two columns id1 and id2.
