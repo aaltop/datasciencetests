@@ -1,3 +1,5 @@
+using Statistics
+
 import XML
 import DataFrames as DF
 import GeoDataFrames as GDF
@@ -16,7 +18,7 @@ const HELSINKI_ID = Int32(40342733)
 
 _data = _Data()
 
-function plot_route!(ax::Axis, start, destination; score::Vector{Pair{String,Function}}=Vector{Pair{String,Function}}["default"=>scoring.score])
+function plot_route!(ax::Axis, start, destination; score::Vector{Pair{String,Function}}=Pair{String,Function}["default"=>scoring.score])
 
 
     _plot(ax, options=[])
@@ -24,8 +26,8 @@ function plot_route!(ax::Axis, start, destination; score::Vector{Pair{String,Fun
     plot!(ax, start.geometry)
     plot!(ax, destination.geometry)
     for (func_name, func) in score
-        route_road_ids = get_path(pathfind(start, destination, score=func))
-        route = subset_by_id(roads(), :OBJECTID => route_road_ids, order=:right)
+        route_info = get_path(pathfind(start, destination, score=func))
+        route = subset_by_id(roads(), :OBJECTID => route_info.path, order=:right)
 
         if length(score) == 1
             # find and plot also some roads that intersect with the found path
@@ -37,7 +39,7 @@ function plot_route!(ax::Axis, start, destination; score::Vector{Pair{String,Fun
             plot!(ax, route_intersects.geometry; color="#0f05")
         end
 
-        plot!(ax, route.geometry, label=func_name)
+        plot!(ax, route.geometry, label="$func_name, length: $(round(route_info.length, digits=2))")
     end
     axislegend(ax)
     return nothing
@@ -61,9 +63,13 @@ function pathfind(start::DF.DataFrameRow, destination::DF.DataFrameRow; score::F
     road_chain = DF.DataFrame(
         id=Int[],
         parent_id=Union{Int,Nothing}[],
+        # the score for this road segment
         score=Float32[],
+        # the sum of the scores on the path up to this road segment
         path_score=Float64[],
+        # at each point, the remaining distance to the destination
         distance=Float32[],
+        # total length of the path up to this point
         path_length=Float64[],
         checked=Bool[]
     )
@@ -79,6 +85,9 @@ function pathfind(start::DF.DataFrameRow, destination::DF.DataFrameRow; score::F
     start_roads = closest_roads(start)[[1], :]
     start_roads.score = [0]
 
+    # The point (e.g. intersection) at which the pathfinding algorithm
+    # is considered to be at any one time.
+    current_point = start.geometry
     starting_distance = GO.distance(start_roads.geometry, destination.geometry)
     road_chain = vcat(
         road_chain,
@@ -88,43 +97,99 @@ function pathfind(start::DF.DataFrameRow, destination::DF.DataFrameRow; score::F
             :score => start_roads.score,
             :path_score => start_roads.score,
             :distance => starting_distance,
-            :path_length => start_roads.AJR_PITUUS,
+            :path_length => GO.distance.([current_point], start_roads.geometry),
             :checked => false
         ])
     )
     destination_road = closest_roads(destination)[1, :]
     max_iter = 1000
     curr_iter = 1
-    rd_inter = DF.innerjoin(roads(), road_intersections(), on=:OBJECTID => :id1)
+    rd_inter = DF.innerjoin(roads(), DF.rename(road_intersection_points(), :geometry => :intersection), on=:OBJECTID => :id1)
 
+
+    # choose start road
+    current_road = road_chain[end, :]
+    road_chain[end, :checked] = true
 
     path_found = false
+    # 1. Find nearest road to starting point (above)
+    # 2. Find intersections for that road
+    # 3. Score the roads that those intersections are for: which
+    # of the roads has a further intersection that, in whatever way,
+    # is best (determined by choice of score function) for getting
+    # towards our destination
+    # 4. Choose the intersection matching the road with the best score
+    # 5. Repeat 2.-4. until the nearest road to destination is reached 
     while curr_iter <= max_iter
         curr_iter += 1
 
-        not_checked = road_chain[.!road_chain.checked, :]
-        if size(not_checked)[1] == 0
-            break
-        end
+        # find possible and suitable road connections
+        # -------------------------------------------
 
-        if path_found
-            # once a path is found, use gathered info to pick other paths
-            # to test: with this heuristic, the closer a road is and
-            # the shorter its path thus far, the better the candidate
-            not_checked = not_checked[sortperm(not_checked.distance .* not_checked.path_length, rev=true), :]
-        end
-        current_road = not_checked[end, :]
-        # set ALL roads with the current ID to checked, regardless of what
-        # their parent_id is (checked meaning that this road's intersections
-        # will have been introduced to the list)
-        road_chain[road_chain.id.==current_road.id, :checked] .= true
         current_intersecting = subset_by_id(rd_inter, :id2 => [current_road.id])
 
-        if size(current_intersecting)[1] == 0
+        # find closest intersections for each intersecting road
+        current_intersecting.distance = GO.distance.([current_point], current_intersecting.intersection)
+        # not-very-nice way of getting the closest intersection: sort
+        # so that closest distances are highest, group by road ID, take
+        # first of each group (which should then be the closest)
+        current_intersecting = DF.DataFrame([
+            gr[1, :] for gr in DF.groupby(
+                current_intersecting[sortperm(current_intersecting.distance), DF.Not(:distance)],
+                :OBJECTID
+            )
+        ])
+
+
+        next_intersecting = subset_by_id(rd_inter, :id2 => current_intersecting.OBJECTID)
+        # calculate distance to each further intersection
+        next_intersecting.distance = GO.distance.(
+            subset_by_id(current_intersecting, :OBJECTID => next_intersecting.id2, order=:right).intersection,
+            next_intersecting.intersection
+        )
+
+        # find the intersections which are closest for each further
+        # road connection
+        next_intersecting = DF.combine(
+            DF.groupby(
+                next_intersecting,
+                :OBJECTID
+            ),
+            :distance => minimum => :not, :
+        )[:, DF.Not(:not)]
+        # remove roads whose intersection is very close for now, mostly
+        # because these just make the scoring difficult
+        next_intersecting = next_intersecting[.!isapprox.(next_intersecting.distance, 0.0), :]
+
+
+        # find possible and suitable road connections
+        # ===========================================
+
+
+        if size(current_intersecting)[1] == 0 || size(next_intersecting)[1] == 0
             continue
         end
 
-        current_intersecting.score = score(start, destination, rd_inter[rd_inter.OBJECTID.==current_road.id, :][1, :], current_intersecting)
+        # find scores with regard to joining roads
+        next_intersecting.score = score(
+            start,
+            destination,
+            # the parents of the next intersecting. Should match the number
+            # and order of paths in `next_intersecting`, naturally.
+            subset_by_id(current_intersecting, :OBJECTID => next_intersecting.id2, order=:right),
+            next_intersecting
+        )
+
+        # score based on the most optimal further connection for each immediate
+        # road connection
+        current_intersecting = DF.innerjoin(
+            current_intersecting,
+            DF.combine(
+                DF.groupby(DF.select(next_intersecting, :id2, :score), :id2),
+                :score => maximum => :score
+            ),
+            on=:OBJECTID => :id2
+        )
         # highest score at the end
         current_intersecting = current_intersecting[sortperm(current_intersecting.score), :]
         # find the check status of each road; some roads might have already
@@ -145,8 +210,8 @@ function pathfind(start::DF.DataFrameRow, destination::DF.DataFrameRow; score::F
             :parent_id => current_road.id,
             :score => current_intersecting.score,
             :path_score => current_intersecting.score .+ current_road.path_score,
-            :distance => GO.distance.([destination.geometry], current_intersecting.geometry),
-            :path_length => current_intersecting.AJR_PITUUS .+ current_road.path_length,
+            :distance => GO.distance.([destination.geometry], current_intersecting.intersection),
+            :path_length => GO.distance.([current_point], current_intersecting.intersection) .+ current_road.path_length,
             :checked => current_intersecting_checked
         ]))
 
@@ -154,9 +219,39 @@ function pathfind(start::DF.DataFrameRow, destination::DF.DataFrameRow; score::F
             road_chain[road_chain.id.==destination_road.OBJECTID, :checked] .= true
             path_found = true
         end
+
+        # find next road on path
+        # -------------------------------------------
+
+        not_checked = road_chain[.!road_chain.checked, :]
+        if size(not_checked)[1] == 0
+            break
+        end
+
+        if path_found
+            # once a path is found, use gathered info to pick other paths
+            # to test: with this heuristic, the closer a road is and
+            # the shorter its path thus far, the better the candidate
+            not_checked = not_checked[sortperm(not_checked.distance .* not_checked.path_length, rev=true), :]
+        end
+        current_road = not_checked[end, :]
+        current_point = rd_inter[rd_inter.OBJECTID.==current_road.id, :intersection][1]
+        # set ALL roads with the current ID to checked, regardless of what
+        # their parent_id is (checked meaning that this road's intersections
+        # will have been introduced to the list)
+        road_chain[road_chain.id.==current_road.id, :checked] .= true
+
+
+        # find next road on path
+        # ===========================================
+
+
     end
     return PathfindResult((; path=road_chain, destination_id=destination_road.OBJECTID, found=path_found))
 end
+
+
+const PathInfo = @NamedTuple{path::Vector{Int}, length::Float64, score::Float64}
 
 """
 Get the paths (sequences of road IDs) from `pathfind_result` if a path
@@ -164,7 +259,7 @@ was found.
 
 See also: [`pathfind`](@ref).
 """
-function get_path(pathfind_result::PathfindResult)::Vector{Int}
+function get_path(pathfind_result::PathfindResult)::PathInfo
 
     if !pathfind_result.found
         return Int[]
@@ -172,6 +267,13 @@ function get_path(pathfind_result::PathfindResult)::Vector{Int}
 
     paths, destination_id = pathfind_result.path, pathfind_result.destination_id
     path_road_ids = [destination_id]
+
+    # get the length and score first
+    next_roads = paths[paths.id.==path_road_ids[end], :]
+    next_roads = next_roads[sortperm(next_roads.path_length), :]
+    length, score = next_roads[1, :path_length], next_roads[1, :path_score]
+    push!(path_road_ids, next_roads[1, :parent_id])
+
     while true
 
         next_roads = paths[paths.id.==path_road_ids[end], :]
@@ -183,7 +285,7 @@ function get_path(pathfind_result::PathfindResult)::Vector{Int}
         push!(path_road_ids, next_id)
 
     end
-    return reverse(path_road_ids)
+    return PathInfo((; path=reverse(path_road_ids), length=length, score=score))
 end
 
 """
@@ -247,7 +349,6 @@ Find the roads that are closest to `location`.
 """
 function closest_roads(location)
     muni_roads = municipality_roads(location)
-
     return muni_roads[closest(location.geometry, muni_roads.geometry), :]
 end
 
