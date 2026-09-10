@@ -15,8 +15,9 @@ mutable struct _Data
     municipality_geom::Union{DF.DataFrame,Nothing}
     road_region_intersect::Union{DF.DataFrame,Nothing}
     road_municipality_intersect::Union{DF.DataFrame,Nothing}
+    road_intersection_points::Union{DF.DataFrame,Nothing}
 
-    _Data() = new(nothing, nothing, nothing, nothing, nothing, nothing)
+    _Data() = new(nothing, nothing, nothing, nothing, nothing, nothing, nothing)
 end
 
 _data = _Data()
@@ -82,6 +83,7 @@ function placenames()
         end
 
         _data.placenames = GP.read(parquet_file)
+        _data.placenames.geometry = _data.placenames.geometry .|> getcoord .|> GI.Point
     end
     return _data.placenames
 end
