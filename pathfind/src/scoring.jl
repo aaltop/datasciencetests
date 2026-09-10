@@ -11,6 +11,9 @@ module scoring
 import DataFrames as DF
 import GeometryOps as GO
 
+include("linalg.jl")
+include("geom.jl")
+
 """
 Default scoring function.
 """
@@ -26,15 +29,12 @@ function score(start::DF.DataFrameRow, destination::DF.DataFrameRow, prev_road::
     # the actual distance S on its own in the score, as L/S -> -∞
     # could still mean a large negative S.
 
+    # TODO: add penalty for changing roads too frequently? Making turns would generally
+    # mean having to slow down; short distances between intersections could
+    # be penalised.
 
     # make sure that these (L and S) are actually the same scale (same units)
     S = GO.distance(destination.geometry, prev_road.intersection) .- GO.distance.([destination.geometry], candidate_roads.intersection)
-    # the distance here is presumably the actual "total length of
-    # road" on this road, meaning that it wouldn't obviously always
-    # be just the distance travelled in a specific direction; for
-    # example, a round-about would be longer than most of the distances
-    # travelled on it. So, actually not that ideal. Especially highways
-    # might have a lot of extra road, which would skew.
     L = GO.distance.(prev_road.intersection, candidate_roads.intersection)
 
     # TODO: add start -> destination direction somehow? Reward paths
@@ -64,6 +64,29 @@ end
 function score_intersection_distance(start::DF.DataFrameRow, destination::DF.DataFrameRow, prev_road::DF.DataFrame, candidate_roads::DF.DataFrame)
     S = -GO.distance.([destination.geometry], candidate_roads.intersection)
     return S
+end
+
+"""
+Calculate score based on how well current direction matches the direction
+of the destination.
+"""
+function score_cosine_similarity(start::DF.DataFrameRow, destination::DF.DataFrameRow, prev_road::DF.DataFrame, candidate_roads::DF.DataFrame)
+    return cosine_similarity.([destination.geometry], candidate_roads.intersection, prev_road.intersection)
+end
+
+"""
+Calculate score based on how closely a road direction matches with
+the start-destination direction.
+"""
+function score_cosine_similarity_start_destination(
+    start::DF.DataFrameRow,
+    destination::DF.DataFrameRow,
+    prev_road::DF.DataFrame,
+    candidate_roads::DF.DataFrame
+)
+    start_destination = getcoord(destination.geometry) .- getcoord(start.geometry)
+    prev_next_road = getcoord.(candidate_roads.intersection) .- getcoord.(prev_road.intersection)
+    return cosine_similarity.([start_destination], prev_next_road)
 end
 
 end
