@@ -463,8 +463,8 @@ function get_path(pathfind_result::PathfindResult; sort_by::Union{Function,Nothi
     # get the length and score first
     next_roads = paths[paths.id.==destination_id, :]
     next_roads = next_roads[sort_by(next_roads), :]
-    length, score, intersection_id = next_roads[1, :path_length], next_roads[1, :path_score], next_roads[1, :intersection_id]
-    added_intersections = Set(intersection_id)
+    length, score = next_roads[1, :path_length], next_roads[1, :path_score]
+    added_intersections = Set()
     path_road_ids = [destination_id]
 
     # TODO: find all possible paths
