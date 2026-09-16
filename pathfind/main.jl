@@ -221,7 +221,7 @@ function pathfind(
     shortest_path_length = Inf64
     path_found = false
     exhausted = false
-    curr_iter = 1
+    curr_iter = 0
     found_destination_intersection::Union{DF.DataFrame,Nothing} = nothing
     # 1. Find nearest road to starting point (above)
     # 2. Find intersections for that road
@@ -241,15 +241,29 @@ function pathfind(
     # need be considered if simple pathfinding is the goal. For the purposes
     # here, though it can take more calculation, it may be best to consider
     # all intersection pairs because limiting the pairs would be difficult.
-    while curr_iter <= max_iter
+    while curr_iter < max_iter
+        curr_iter += 1
         print("\r")
         print("iter $curr_iter/$max_iter")
-        curr_iter += 1
         found_destination_intersection = nothing
 
 
         # find next road on path
         # -------------------------------------------
+
+
+        if path_found && (curr_iter % 100 == 0) && (DF.nrow(road_chain) > 3000)
+            # Remove path points from chosen intersections if they appear to
+            # be worse than the shortest found path. Main intention is to
+            # improve performance for larger iteration counts, as without
+            # this, road_chain might end up with a lot of rows, most of
+            # which go unused.
+            #
+            # With infinite computational resources, this would of course
+            # not be done, as it might still remove parts of good paths
+            # as well.
+            road_chain = road_chain[(road_chain.distance.+road_chain.path_length).<1.02*shortest_path_length, :]
+        end
 
         to_check = DF.DataFrame([:row => 1:DF.nrow(road_chain), :checked => road_chain.checked])
         if path_found
@@ -260,6 +274,8 @@ function pathfind(
             possibly_shorter = approx_distance.(road_chain.distance, road_chain.path_length)
             possibly_shorter_order = sortperm(possibly_shorter, rev=true)
             to_check = to_check[possibly_shorter_order, :]
+
+
         end
 
         n = DF.nrow(to_check)
