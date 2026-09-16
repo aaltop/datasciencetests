@@ -24,8 +24,8 @@ function plot_route!(
     start,
     destination;
     score::Vector{Pair{String,Function}}=Pair{String,Function}["default"=>scoring.score],
-    sort_by::Union{Function,Nothing}=nothing,
-    max_iter::Int=nothing
+    pathfind_kwargs=(;),
+    get_path_kwargs=(;)
 )
 
 
@@ -35,7 +35,7 @@ function plot_route!(
     plot!(ax, destination.geometry)
     for (func_name, func) in score
 
-        route_info = get_path(pathfind(start, destination, score=func, max_iter=max_iter), sort_by=sort_by)
+        route_info = get_path(pathfind(start, destination; score=func, pathfind_kwargs...); get_path_kwargs...)
         if length(score) == 1
             _plot_route!(ax, route_info, func_name, color_segments=true)
         else
@@ -92,13 +92,8 @@ end
 
 const PathfindResult = @NamedTuple{path::DF.DataFrame, destination_id::Int32, found::Bool}
 
-# add roads with own id, parent id, and checked
-# status. For the lowest non-checked, find all intersecting, add to end
-# of dataframe (in descending order based on how close road is to destination,
-# such that the closest road is lowest), repeat until hopefully finding destination road. If
-# destination road is found, go back up its ID chain to top.
 """
-Find a path between `start` and `destination`. These should rows as
+Find a path between `start` and `destination`. These should be rows as
 returned by [`search_places`](@ref).
 
 See also: [`get_path`](@ref).
@@ -181,7 +176,22 @@ function pathfind(
         :intersection => [destination.geometry, destination.geometry]
     ]))
     rd_inter = hcat(rd_inter, DF.DataFrame([:intersection_id => 1:DF.nrow(rd_inter), :not_checked => true]))
+
+    # not entirely sure why rd_inter loses the typing information above,
+    # just do these to speed up computations later on. Would be nicer
+    # to just have it retain the typing info in the first place, but
+    # not that big of an issue, as this is relatively a small set of operations,
+    # timing-wise.
+    rd_inter.OBJECTID = Int.(rd_inter.OBJECTID)
+    rd_inter.id2 = Int.(rd_inter.id2)
+    rd_inter.intersection = GI.Point.(rd_inter.intersection)
+
+
     destination_intersection = rd_inter[end-1, :]
+
+    # TODO: use GroupedDataFrame indexing functionality to directly get
+    # the necessary row indices
+    id2_rows = DF.groupby(DF.DataFrame([:id2 => rd_inter.id2, :row => 1:DF.nrow(rd_inter)]), :id2)
 
     if isnothing(max_iter)
         max_iter = 1000
@@ -278,19 +288,6 @@ function pathfind(
                     for row_num in reassign_children_row
                         row = road_chain[row_num, :]
 
-                        # this child intersection has already been checked,
-                        # meaning that it's not the "leaf" in a path that
-                        # has been tested — meaning that it has already
-                        # passed a given path's length and total score
-                        # to further road sections. Therefore, find also
-                        # its children and reset the path length and score
-                        # for those too
-                        if row.checked && !(row.intersection_id in reassigned_ids)
-                            push!(reassign_parents, row)
-                            # prevent infinite reassign loops
-                            push!(reassigned_ids, row.intersection_id)
-                        end
-
                         # assign the shorter path length, and with
                         # it the corresponding path score 
                         # (whether better or not)
@@ -303,6 +300,20 @@ function pathfind(
                                 shortest_path_length = min(shortest_path_length, row.path_length)
                                 # println("Current shortest: $shortest_path_length")
                             end
+
+                            # this child intersection has already been checked,
+                            # meaning that it's not the "leaf" in a path that
+                            # has been tested — meaning that it has already
+                            # passed a given path's length and total score
+                            # to further road sections. Therefore, find also
+                            # its children and reset the path length and score
+                            # for those too
+                            if row.checked && !(row.intersection_id in reassigned_ids)
+                                push!(reassign_parents, row)
+                                # prevent infinite reassign loops
+                                push!(reassigned_ids, row.intersection_id)
+                            end
+
                         end
 
                     end
@@ -331,11 +342,6 @@ function pathfind(
             break
         end
 
-        # if intersection hasn't been checked, but its road *is* in parent
-        # IDs, the intersections that the road connects to need to be
-        # reassigned (based on intersection_id) *if* their path_length
-        # would be shorter with this new path
-
         # find next road on path
         # ===========================================
 
@@ -343,7 +349,7 @@ function pathfind(
         # find possible and suitable road connections
         # -------------------------------------------
 
-        current_intersecting = subset_by_id(rd_inter, :id2 => [current_road.id])
+        current_intersecting = rd_inter[id2_rows[(current_road.id,)].row, :]
         if destination_intersection.OBJECTID in current_intersecting.OBJECTID
             found_destination_intersection = subset_by_id(current_intersecting, :OBJECTID => [destination_intersection.OBJECTID])[[1], :]
         end
@@ -360,7 +366,15 @@ function pathfind(
             )
         ])
 
-        next_intersecting = subset_by_id(rd_inter, :id2 => current_intersecting.OBJECTID)
+        next_intersecting = rd_inter[
+            # find row indices of current_intersecting intersections in
+            # rd_inter. id2_rows is grouped dataframe which takes vectors
+            # of tuples as indices to find the groups with those "keys",
+            # in this case the id2 values. To make one joined dataframe,
+            # splat the iterable of groupeddataframes into vcat.
+            vcat(id2_rows[Tuple.(unique(current_intersecting.OBJECTID))]...).row,
+            :
+        ]
         # calculate distance to each further intersection
         next_intersecting.distance = GO.distance.(
             subset_by_id(current_intersecting, :OBJECTID => next_intersecting.id2, order=:right).intersection,
@@ -435,18 +449,8 @@ function pathfind(
         ]))
 
         if destination_intersection.OBJECTID in current_intersecting.OBJECTID
-            # TODO: add path score
             destination_loc = (road_chain.id .== destination_intersection.OBJECTID)
             road_chain[destination_loc, :checked] .= true
-            # TODO: figure something out for these. Basically for it to be
-            # consistent, a point shoud be
-            # included in the intersections which is the closest point
-            # to our destination. Otherwise, our final path length here
-            # is *up to* the intersection on that final road that intersects
-            # with the second-to-last road, which
-            # might not be that close to our actual destination
-            # road_chain[destination_loc, :path_length] .+= road_chain[destination_loc, :distance] .- final_distance
-            # road_chain[destination_loc, :distance] .= final_distance
             path_found = true
 
             shortest_path_length = min(shortest_path_length, road_chain[destination_loc, :path_length]...)
@@ -479,6 +483,8 @@ result = pathfind(location1, location2)
 get_path(result)
 # use path score instead for finding "best" path
 get_path(result, sort_by = x -> sortperm(x.path_score, rev=true))
+# ...or with DataFrames-style sortperm
+get_path(result, sort_by = x -> sortperm(x [DF.order(:path_score, rev=true)]))
 ```
 
 """
@@ -490,7 +496,7 @@ function get_path(pathfind_result::PathfindResult; sort_by::Union{Function,Nothi
     end
 
     if isnothing(sort_by)
-        sort_by = x -> sortperm(x.path_length)
+        sort_by = x -> sortperm(x, [:path_length, DF.order(:path_score, rev=true)])
     end
 
     paths, destination_id = pathfind_result.path, pathfind_result.destination_id
