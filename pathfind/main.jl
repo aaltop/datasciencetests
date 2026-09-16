@@ -25,21 +25,25 @@ function plot_route!(
     destination;
     score::Vector{Pair{String,Function}}=Pair{String,Function}["default"=>scoring.score],
     pathfind_kwargs=(;),
-    get_path_kwargs=(;)
+    get_path_kwargs=(;),
+    plot_kwargs=(;),
+    clear_plot=true,
 )
 
 
-    _plot(ax, options=[])
+    if clear_plot
+        _plot(ax, options=[])
+        plot!(ax, start.geometry)
+        plot!(ax, destination.geometry)
+    end
     remove_legends!(ax.parent)
-    plot!(ax, start.geometry)
-    plot!(ax, destination.geometry)
     for (func_name, func) in score
 
         route_info = get_path(pathfind(start, destination; score=func, pathfind_kwargs...); get_path_kwargs...)
         if length(score) == 1
-            _plot_route!(ax, route_info, func_name, color_segments=true)
+            _plot_route!(ax, route_info, func_name; color_segments=true, plot_kwargs...)
         else
-            _plot_route!(ax, route_info, func_name)
+            _plot_route!(ax, route_info, func_name; plot_kwargs...)
         end
 
 
@@ -87,6 +91,14 @@ function _plot_route!(ax::Axis, route_info::PathInfo, legend_name::String; nearb
     end
 
     axislegend()
+
+end
+
+function plot_comparison!(ax::Axis, start, destination; max_iter=500)
+
+    plot_kwargs = (; color_segments=false)
+    plot_route!(ax, start, destination, score=Pair{String,Function}["fast return"=>scoring.score], clear_plot=true, pathfind_kwargs=(; return_fast=true), plot_kwargs=plot_kwargs)
+    plot_route!(ax, start, destination, score=Pair{String,Function}["max_iter: $max_iter"=>scoring.score], pathfind_kwargs=(; max_iter=max_iter), clear_plot=false, plot_kwargs=plot_kwargs)
 
 end
 
@@ -189,15 +201,23 @@ function pathfind(
 
     destination_intersection = rd_inter[end-1, :]
 
-    # TODO: use GroupedDataFrame indexing functionality to directly get
-    # the necessary row indices
-    id2_rows = DF.groupby(DF.DataFrame([:id2 => rd_inter.id2, :row => 1:DF.nrow(rd_inter)]), :id2)
+    id2_rows = Dict{Int,Vector{Int}}(
+        g.id2[1] => Int.(g.row) for g in
+        DF.groupby(DF.DataFrame([:id2 => rd_inter.id2, :row => 1:DF.nrow(rd_inter)]), :id2)
+    )
+
+    """
+    Get rows indices for `rd_inter` where IDs in `id2s` match those of the
+    `id2` column in `rd_inter`.
+    """
+    function get_id2_rows(id2s::Vector{Int})::Vector{Int}
+        return vcat(get.([id2_rows], unique(id2s), [Int[]])...)
+    end
 
     if isnothing(max_iter)
         max_iter = 1000
     end
     current_road = road_chain[end, :]
-    starting_approx_distance = approx_distance(current_road.distance, current_road.path_length)
     shortest_path_length = Inf64
     path_found = false
     exhausted = false
@@ -238,22 +258,6 @@ function pathfind(
             # the shorter its path thus far, the better the candidate
 
             possibly_shorter = approx_distance.(road_chain.distance, road_chain.path_length)
-            # don't bother with paths that would likely be longer than
-            # the shortest found path. Doing it here every iteration
-            # means that if a shorter path is found up to a given road
-            # segment, its per-iteration check status here might change
-            # to false, and then it could be checked. But, as long as
-            # the expected path length is more than the shortest path,
-            # there is no point in going further down that path.
-            to_check.checked .= (
-                to_check.checked
-                # penalises paths further away (more emphasis on
-                # large distance values)
-                .|| (possibly_shorter .> starting_approx_distance)
-                # penalises paths that are closer (more emphasis on
-                # large path lengths)
-                .|| (road_chain.path_length .> shortest_path_length)
-            )
             possibly_shorter_order = sortperm(possibly_shorter, rev=true)
             to_check = to_check[possibly_shorter_order, :]
         end
@@ -349,7 +353,7 @@ function pathfind(
         # find possible and suitable road connections
         # -------------------------------------------
 
-        current_intersecting = rd_inter[id2_rows[(current_road.id,)].row, :]
+        current_intersecting = rd_inter[get_id2_rows([current_road.id]), :]
         if destination_intersection.OBJECTID in current_intersecting.OBJECTID
             found_destination_intersection = subset_by_id(current_intersecting, :OBJECTID => [destination_intersection.OBJECTID])[[1], :]
         end
@@ -366,13 +370,17 @@ function pathfind(
             )
         ])
 
+        if DF.nrow(current_intersecting) == 0
+            continue
+        end
+
         next_intersecting = rd_inter[
             # find row indices of current_intersecting intersections in
             # rd_inter. id2_rows is grouped dataframe which takes vectors
             # of tuples as indices to find the groups with those "keys",
             # in this case the id2 values. To make one joined dataframe,
             # splat the iterable of groupeddataframes into vcat.
-            vcat(id2_rows[Tuple.(unique(current_intersecting.OBJECTID))]...).row,
+            get_id2_rows(current_intersecting.OBJECTID),
             :
         ]
         # calculate distance to each further intersection
@@ -391,13 +399,13 @@ function pathfind(
         ])
         # remove roads whose intersection is very close for now, mostly
         # because these just make the scoring difficult
-        next_intersecting = next_intersecting[.!isapprox.(next_intersecting.distance, 0.0), :]
+        next_intersecting = next_intersecting[.!isapprox.(next_intersecting.distance, 0.0), DF.Not(:distance)]
 
 
         # find possible and suitable road connections
         # ===========================================
 
-        if size(current_intersecting)[1] == 0 || size(next_intersecting)[1] == 0
+        if DF.nrow(next_intersecting) == 0
             continue
         end
 
