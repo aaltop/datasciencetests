@@ -217,6 +217,7 @@ function pathfind(
     if isnothing(max_iter)
         max_iter = 1000
     end
+
     current_road = road_chain[end, :]
     shortest_path_length = Inf64
     path_found = false
@@ -262,6 +263,10 @@ function pathfind(
             # With infinite computational resources, this would of course
             # not be done, as it might still remove parts of good paths
             # as well.
+
+            # could use subset!, but not sure if it's really better?
+            # seems the recompilation time of the nameless function tends
+            # to slow it down?
             road_chain = road_chain[(road_chain.distance.+road_chain.path_length).<1.02*shortest_path_length, :]
         end
 
@@ -432,12 +437,9 @@ function pathfind(
             )
         end
         # highest score at the end
-        current_intersecting = current_intersecting[sortperm(current_intersecting.score), :]
+        current_intersecting = DF.sort!(current_intersecting, :score)
 
-        # TODO: maybe keep the checked and non-checked tables separate?
-        # less stuff to concatenate here, might be faster. Would also mean
-        # no need to filter out checked values above.
-        road_chain = vcat(road_chain, DF.DataFrame([
+        append!(road_chain, DF.DataFrame([
             :id => current_intersecting.OBJECTID,
             :parent_id => current_road.id,
             :score => current_intersecting.score,
