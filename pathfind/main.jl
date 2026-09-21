@@ -383,10 +383,19 @@ function pathfind(
             get_id2_rows(current_intersecting.OBJECTID),
             :
         ]
+
+        # match rows of current_intersecting to ones in next_intersecting
+        # to speed up finding matching intersections later on
+        next_intersecting = DF.innerjoin(
+            next_intersecting,
+            DF.DataFrame([:id2 => current_intersecting.OBJECTID, :current_intersecting_row => 1:DF.nrow(current_intersecting)]),
+            on=:id2
+        )
+
+
         # calculate distance to each further intersection
         next_intersecting.distance = GO.distance.(
-            # TODO: speedup
-            subset_by_id(current_intersecting, :OBJECTID => next_intersecting.id2, order=:right).intersection,
+            current_intersecting[next_intersecting.current_intersecting_row, :intersection],
             next_intersecting.intersection
         )
 
@@ -405,25 +414,25 @@ function pathfind(
             continue
         end
 
+
         # find scores with regard to joining roads
         next_intersecting.score = score(
             start,
             destination,
             # the parents of the next intersecting. Should match the number
             # and order of paths in `next_intersecting`, naturally.
-            subset_by_id(current_intersecting, :OBJECTID => next_intersecting.id2, order=:right),
+            current_intersecting[next_intersecting.current_intersecting_row, :],
             next_intersecting
         )
 
+        best_scores = unique(DF.sort(next_intersecting, [:current_intersecting_row, DF.order(:score, rev=true)]), :id2)
+        # remove current_intersecting intersections that lost
+        # to another intersection (had only common intersections, but worse
+        # scores for those intersections)
+        current_intersecting = current_intersecting[best_scores.current_intersecting_row, :]
         # score based on the most optimal further connection for each immediate
         # road connection
-        current_intersecting = DF.innerjoin(
-            current_intersecting,
-            # get the highest scoring next intersection per each current
-            # intersection
-            unique(DF.sort(next_intersecting, :score, rev=true), :id2)[:, [:id2, :score]],
-            on=:OBJECTID => :id2
-        )
+        current_intersecting.score = best_scores.score
 
         # the algorithm above might not allow the destination to
         # pass through, particularly as it only intersects the one road,
@@ -431,13 +440,13 @@ function pathfind(
         if !isnothing(found_destination_intersection)
             # TODO: calculate a proper score?
             found_destination_intersection.score = [0.0]
-            current_intersecting = vcat(
+            append!(
                 current_intersecting,
                 found_destination_intersection
             )
         end
         # highest score at the end
-        current_intersecting = DF.sort!(current_intersecting, :score)
+        DF.sort!(current_intersecting, :score)
 
         append!(road_chain, DF.DataFrame([
             :id => current_intersecting.OBJECTID,
