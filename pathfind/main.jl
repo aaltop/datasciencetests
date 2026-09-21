@@ -364,45 +364,30 @@ function pathfind(
             found_destination_intersection = subset_by_id(current_intersecting, :OBJECTID => [destination_intersection.OBJECTID])[[1], :]
         end
 
-        # find closest intersections for each intersecting road
         current_intersecting.distance = GO.distance.([current_road.intersection], current_intersecting.intersection)
-        # not-very-nice way of getting the closest intersection: sort
-        # so that closest distances are highest, group by road ID, take
-        # first of each group (which should then be the closest)
-        current_intersecting = DF.DataFrame([
-            gr[1, :] for gr in DF.groupby(
-                current_intersecting[sortperm(current_intersecting.distance), DF.Not(:distance)],
-                :OBJECTID
-            )
-        ])
+        # find closest intersections for each intersecting road:
+        # sort so that closest distances are highest, take
+        # first of each OBJECTID group (which should then be the closest)
+        current_intersecting = unique(DF.sort(current_intersecting, :distance), :OBJECTID)[:, DF.Not(:distance)]
 
         if DF.nrow(current_intersecting) == 0
             continue
         end
 
         next_intersecting = rd_inter[
-            # find row indices of current_intersecting intersections in
-            # rd_inter. id2_rows is grouped dataframe which takes vectors
-            # of tuples as indices to find the groups with those "keys",
-            # in this case the id2 values. To make one joined dataframe,
-            # splat the iterable of groupeddataframes into vcat.
             get_id2_rows(current_intersecting.OBJECTID),
             :
         ]
         # calculate distance to each further intersection
         next_intersecting.distance = GO.distance.(
+            # TODO: speedup
             subset_by_id(current_intersecting, :OBJECTID => next_intersecting.id2, order=:right).intersection,
             next_intersecting.intersection
         )
 
         # find the intersections which are closest for each further
         # road connection
-        next_intersecting = DF.DataFrame([
-            gr[1, :] for gr in DF.groupby(
-                next_intersecting[sortperm(next_intersecting.distance), :],
-                :OBJECTID
-            )
-        ])
+        next_intersecting = unique(DF.sort(next_intersecting, :distance), :OBJECTID)
         # remove roads whose intersection is very close for now, mostly
         # because these just make the scoring difficult
         next_intersecting = next_intersecting[.!isapprox.(next_intersecting.distance, 0.0), DF.Not(:distance)]
@@ -429,10 +414,9 @@ function pathfind(
         # road connection
         current_intersecting = DF.innerjoin(
             current_intersecting,
-            DF.combine(
-                DF.groupby(DF.select(next_intersecting, :id2, :score), :id2),
-                :score => maximum => :score
-            ),
+            # get the highest scoring next intersection per each current
+            # intersection
+            unique(DF.sort(next_intersecting, :score, rev=true), :id2)[:, [:id2, :score]],
             on=:OBJECTID => :id2
         )
 
@@ -450,6 +434,9 @@ function pathfind(
         # highest score at the end
         current_intersecting = current_intersecting[sortperm(current_intersecting.score), :]
 
+        # TODO: maybe keep the checked and non-checked tables separate?
+        # less stuff to concatenate here, might be faster. Would also mean
+        # no need to filter out checked values above.
         road_chain = vcat(road_chain, DF.DataFrame([
             :id => current_intersecting.OBJECTID,
             :parent_id => current_road.id,
