@@ -131,7 +131,7 @@ function pathfind(
         # intersection from which this road is entered
         intersection=GI.Point[],
         intersection_id=Union{Int,Nothing}[],
-        checked=Bool[]
+        not_checked=Bool[]
     )
 
     """
@@ -168,7 +168,7 @@ function pathfind(
             :path_length => GO.distance.([start.geometry], start_roads.geometry),
             :intersection => start.geometry,
             :intersection_id => nothing,
-            :checked => false
+            :not_checked => true
         ])
     )
     destination_road = closest_roads(destination)[1, :]
@@ -265,7 +265,7 @@ function pathfind(
             road_chain = road_chain[(road_chain.distance.+road_chain.path_length).<1.02*shortest_path_length, :]
         end
 
-        to_check = DF.DataFrame([:row => 1:DF.nrow(road_chain), :checked => road_chain.checked])
+        to_check = DF.DataFrame([:row => 1:DF.nrow(road_chain), :not_checked => road_chain.not_checked])
         if path_found
             # once a path is found, use gathered info to pick other paths
             # to test: with this heuristic, the closer a road is and
@@ -288,7 +288,7 @@ function pathfind(
             # parent segment — road segment -configuration)
             # children have already been checked, so don't set as
             # current road to check.
-            if to_check_row.checked
+            if !to_check_row.not_checked
                 continue
             end
             current_road = road_chain[to_check_row.row, :]
@@ -313,12 +313,10 @@ function pathfind(
                         # (whether better or not)
                         new_path_length = path_length(parent_intersection.path_length, parent_intersection.intersection, row.intersection)
                         if row.path_length > new_path_length
-                            # println("reassign $(parent_intersection.id)-$(row.id): $(row.distance) + $(row.path_length) -> $(new_path_length) | $(row.path_score) -> $(row.score) + $(parent_intersection.path_score)")
                             row.path_length = new_path_length
                             row.path_score = parent_intersection.path_score + row.score
                             if row.id == destination_intersection.OBJECTID
                                 shortest_path_length = min(shortest_path_length, row.path_length)
-                                # println("Current shortest: $shortest_path_length")
                             end
 
                             # this child intersection has already been checked,
@@ -328,7 +326,7 @@ function pathfind(
                             # to further road sections. Therefore, find also
                             # its children and reset the path length and score
                             # for those too
-                            if row.checked && !(row.intersection_id in reassigned_ids)
+                            if !row.not_checked && !(row.intersection_id in reassigned_ids)
                                 push!(reassign_parents, row)
                                 # prevent infinite reassign loops
                                 push!(reassigned_ids, row.intersection_id)
@@ -345,14 +343,14 @@ function pathfind(
                 # set the road segment as checked, but because its children
                 # have already been processed, don't use it as the
                 # next road segment
-                current_road.checked = true
+                current_road.not_checked = false
                 continue
             end
 
             # as the road segment was not checked at all, all road
             # segments have not been exhausted yet 
             exhausted = false
-            current_road.checked = true
+            current_road.not_checked = false
             # this particular road segment's children have not been checked
             # yet, so do that next
             break
@@ -469,12 +467,12 @@ function pathfind(
             :path_length => path_length.([current_road.path_length], [current_road.intersection], current_intersecting.intersection),
             :intersection => current_intersecting.intersection,
             :intersection_id => current_intersecting.intersection_id,
-            :checked => false
+            :not_checked => true
         ]))
 
         if destination_intersection.OBJECTID in current_intersecting.OBJECTID
             destination_loc = (road_chain.id .== destination_intersection.OBJECTID)
-            road_chain[destination_loc, :checked] .= true
+            road_chain[destination_loc, :not_checked] .= false
             path_found = true
 
             shortest_path_length = min(shortest_path_length, road_chain[destination_loc, :path_length]...)
