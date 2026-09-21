@@ -265,33 +265,25 @@ function pathfind(
             road_chain = road_chain[(road_chain.distance.+road_chain.path_length).<1.02*shortest_path_length, :]
         end
 
-        to_check = DF.DataFrame([:row => 1:DF.nrow(road_chain), :not_checked => road_chain.not_checked])
+        n = DF.nrow(road_chain)
+        road_chain_rows = collect(1:n)
+        to_check = road_chain_rows[road_chain.not_checked]
         if path_found
             # once a path is found, use gathered info to pick other paths
             # to test: with this heuristic, the closer a road is and
             # the shorter its path thus far, the better the candidate
 
-            possibly_shorter = approx_distance.(road_chain.distance, road_chain.path_length)
+            road_chain_not_checked = road_chain[road_chain.not_checked, :]
+            possibly_shorter = approx_distance.(road_chain_not_checked.distance, road_chain_not_checked.path_length)
             possibly_shorter_order = sortperm(possibly_shorter, rev=true)
-            to_check = to_check[possibly_shorter_order, :]
+            to_check = to_check[possibly_shorter_order]
 
 
         end
 
-        n = DF.nrow(to_check)
-        road_chain_rows = collect(1:n)
-        for i in n:-1:1
-            exhausted = i == 1
-
-            to_check_row = to_check[i, :]
-            # this road segment's (in particular, with this
-            # parent segment — road segment -configuration)
-            # children have already been checked, so don't set as
-            # current road to check.
-            if !to_check_row.not_checked
-                continue
-            end
-            current_road = road_chain[to_check_row.row, :]
+        for i in length(to_check):-1:1
+            exhausted = i == i
+            current_road = road_chain[to_check[i], :]
             # This road's children have already been checked, but with
             # the road itself having a different parent during that previous
             # check. Therefore, the path leading up to this road would
@@ -348,7 +340,7 @@ function pathfind(
             end
 
             # as the road segment was not checked at all, all road
-            # segments have not been exhausted yet 
+            # segments have not been exhausted yet
             exhausted = false
             current_road.not_checked = false
             # this particular road segment's children have not been checked
