@@ -94,7 +94,11 @@ function _plot_route!(ax::Axis, route_info::PathInfo, legend_name::String; nearb
 
 end
 
-function plot_comparison!(ax::Axis, start, destination; max_iter=500)
+function plot_comparison!(ax::Axis, start, destination; max_iter=500, score=nothing)
+
+    if isnothing(score)
+        score = scoring.score
+    end
 
     plot_kwargs = (; color_segments=false)
     plot_route!(ax, start, destination, score=Pair{String,Function}["fast return"=>scoring.score], clear_plot=true, pathfind_kwargs=(; return_fast=true), plot_kwargs=plot_kwargs)
@@ -102,7 +106,39 @@ function plot_comparison!(ax::Axis, start, destination; max_iter=500)
 
 end
 
-const PathfindResult = @NamedTuple{path::DF.DataFrame, destination_id::Int32, found::Bool}
+function plot_path_length_improvements!(ax::Axis, start, destination, names::Tuple{String,String}, info::String; pathfind_kwargs=(;), save_figure::Bool=false)
+
+    max_iter = get(pathfind_kwargs, :max_iter, 10_000)
+
+    result = pathfind(start, destination; pathfind_kwargs...)
+    improvements = DF.DataFrame(result.improvements, [:iter, :length])
+    empty!(ax)
+    remove_legends!(ax.parent)
+    max_length = round(maximum(improvements.length), digits=2)
+    min_length = round(minimum(improvements.length), digits=2)
+    ax.title = "$(names[1]) -> $(names[2]), max_iter = $max_iter)\nmax $max_length min $min_length\n$info"
+    lines!(ax, improvements.iter, improvements.length)
+    autolimits!(ax)
+
+    if save_figure
+
+        i = 0
+        filename = ""
+        while true
+            i += 1
+            idx = lpad("$i", 4, "0")
+            filename = "output/path_performance_$(names[1])_$(names[2])$(idx).png"
+            if Base.Filesystem.ispath(filename)
+                continue
+            end
+            break
+        end
+
+        save(filename, ax.parent)
+    end
+end
+
+const PathfindResult = @NamedTuple{path::DF.DataFrame, destination_id::Int32, found::Bool, improvements::Vector{Tuple{Int,Float64}}}
 
 """
 Find a path between `start` and `destination`. These should be rows as
@@ -223,6 +259,7 @@ function pathfind(
     path_found = false
     exhausted = false
     curr_iter = 0
+    path_length_change = Tuple{Int,Float64}[]
     found_destination_intersection::Union{DF.DataFrame,Nothing} = nothing
     # 1. Find nearest road to starting point (above)
     # 2. Find intersections for that road
@@ -279,7 +316,7 @@ function pathfind(
             # the shorter its path thus far, the better the candidate
 
             road_chain_not_checked = road_chain[road_chain.not_checked, :]
-            possibly_shorter = approx_distance.(road_chain_not_checked.distance, road_chain_not_checked.path_length)
+            possibly_shorter = approx_distance.(road_chain_not_checked.distance, road_chain_not_checked.path_length) .* (-road_chain_not_checked.score)
             possibly_shorter_order = sortperm(possibly_shorter, rev=true)
             to_check = to_check[possibly_shorter_order]
 
@@ -314,6 +351,7 @@ function pathfind(
                             row.path_score = parent_intersection.path_score + row.score
                             if row.id == destination_intersection.OBJECTID
                                 shortest_path_length = min(shortest_path_length, row.path_length)
+                                push!(path_length_change, (curr_iter, shortest_path_length))
                             end
 
                             # this child intersection has already been checked,
@@ -466,6 +504,7 @@ function pathfind(
             path_found = true
 
             shortest_path_length = min(shortest_path_length, road_chain[destination_loc, :path_length]...)
+            push!(path_length_change, (curr_iter, shortest_path_length))
         end
 
         if return_fast && path_found
@@ -473,7 +512,12 @@ function pathfind(
         end
 
     end
-    return PathfindResult((; path=road_chain, destination_id=destination_intersection.OBJECTID, found=path_found))
+    return PathfindResult((;
+        path=road_chain,
+        destination_id=destination_intersection.OBJECTID,
+        found=path_found,
+        improvements=unique(x -> x[1], sort(push!(path_length_change, (curr_iter, shortest_path_length))))
+    ))
 end
 
 """
