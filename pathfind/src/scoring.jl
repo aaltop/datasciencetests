@@ -58,7 +58,12 @@ function score(start::DF.DataFrameRow, destination::DF.DataFrameRow, prev_road::
     _score[_score.<0] .-= maximum(_score[_score_positive_mask], init=1.0)
     _score[_score_positive_mask] .*= -1
 
-    return _score
+    mult = score_cosine_similarity(start, destination, prev_road, candidate_roads)
+
+    # cosine_similarity is -1 <= x <= 1, transform so 1 becomes 0 and -1 becomes 2
+    # multiply the score, leading to high similarity directions being emphasised
+    # more
+    return _score .* (abs.(mult .- 1)) .^ 0.5
 end
 
 function score_intersection_distance(start::DF.DataFrameRow, destination::DF.DataFrameRow, prev_road::DF.DataFrame, candidate_roads::DF.DataFrame)

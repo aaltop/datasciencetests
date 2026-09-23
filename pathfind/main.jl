@@ -59,7 +59,7 @@ const PathInfo = @NamedTuple{path::Vector{Int}, length::Float64, score::Float64}
 function _plot_route!(ax::Axis, route_info::PathInfo, legend_name::String; nearby_roads::Bool=false, color_segments::Bool=false)
 
     route = subset_by_id(roads(), :OBJECTID => route_info.path, order=:right)
-
+    ax.title = ""
 
     # find and plot also some roads that intersect with the found path
     # to get an idea of how good the path might be
@@ -94,21 +94,34 @@ function _plot_route!(ax::Axis, route_info::PathInfo, legend_name::String; nearb
 
 end
 
-function plot_comparison!(ax::Axis, start, destination; max_iter=500, score=nothing)
+function plot_comparison!(ax::Axis, start, destination; max_iter=500, max_seconds=Inf, score=nothing)
 
     if isnothing(score)
         score = scoring.score
     end
 
     plot_kwargs = (; color_segments=false)
-    plot_route!(ax, start, destination, score=Pair{String,Function}["fast return"=>scoring.score], clear_plot=true, pathfind_kwargs=(; return_fast=true), plot_kwargs=plot_kwargs)
-    plot_route!(ax, start, destination, score=Pair{String,Function}["max_iter: $max_iter"=>scoring.score], pathfind_kwargs=(; max_iter=max_iter), clear_plot=false, plot_kwargs=plot_kwargs)
+    plot_route!(
+        ax, start, destination,
+        score=Pair{String,Function}["fast return"=>scoring.score],
+        clear_plot=true,
+        pathfind_kwargs=(; return_fast=true, max_iter=max_iter, max_seconds=max_seconds),
+        plot_kwargs=plot_kwargs
+    )
+    plot_route!(
+        ax, start, destination,
+        score=Pair{String,Function}["max_iter: $max_iter"=>scoring.score],
+        pathfind_kwargs=(; max_iter=max_iter, max_seconds=max_seconds),
+        clear_plot=false,
+        plot_kwargs=plot_kwargs
+    )
 
 end
 
 function plot_path_length_improvements!(ax::Axis, start, destination, names::Tuple{String,String}, info::String; pathfind_kwargs=(;), save_figure::Bool=false)
 
     max_iter = get(pathfind_kwargs, :max_iter, 10_000)
+    max_seconds = get(pathfind_kwargs, :max_seconds, Inf)
 
     result = pathfind(start, destination; pathfind_kwargs...)
     improvements = DF.DataFrame(result.improvements, [:iter, :length])
@@ -116,9 +129,14 @@ function plot_path_length_improvements!(ax::Axis, start, destination, names::Tup
     remove_legends!(ax.parent)
     max_length = round(maximum(improvements.length), digits=2)
     min_length = round(minimum(improvements.length), digits=2)
-    ax.title = "$(names[1]) -> $(names[2]), max_iter = $max_iter)\nmax $max_length min $min_length\n$info"
+    ax.title = "$(names[1]) -> $(names[2]), max_iter = $max_iter, max_seconds = $max_seconds\nmax $max_length min $min_length\n$info"
     lines!(ax, improvements.iter, improvements.length)
     autolimits!(ax)
+    xlims!(ax, [-10, max_iter + 10])
+    length_mean = mean(improvements.length)
+    length_std = std(improvements.length)
+    ylims!(ax, [max(min_length * 0.9, length_mean - 2 * length_std), min(max_length * 1.10, length_mean + 2 * length_std)])
+    vlines!(ax, collect(0:1000:max_iter), color=(:orange, 0.5))
 
     if save_figure
 
@@ -151,7 +169,9 @@ function pathfind(
     destination::DF.DataFrameRow;
     score::Function=scoring.score,
     max_iter::Union{Int,Nothing}=nothing,
-    return_fast::Bool=false)#::PathfindResult
+    max_seconds::Float64=Inf,
+    return_fast::Bool=false,
+)#::PathfindResult
 
     road_chain = DF.DataFrame(
         id=Int[],
@@ -261,6 +281,7 @@ function pathfind(
     curr_iter = 0
     path_length_change = Tuple{Int,Float64}[]
     found_destination_intersection::Union{DF.DataFrame,Nothing} = nothing
+    start_time = time()
     # 1. Find nearest road to starting point (above)
     # 2. Find intersections for that road
     # 3. Score the roads that those intersections are for: which
@@ -279,7 +300,7 @@ function pathfind(
     # need be considered if simple pathfinding is the goal. For the purposes
     # here, though it can take more calculation, it may be best to consider
     # all intersection pairs because limiting the pairs would be difficult.
-    while curr_iter < max_iter
+    while (curr_iter < max_iter) && (max_seconds == Inf || time() - start_time < max_seconds)
         curr_iter += 1
         print("\r")
         print("iter $curr_iter/$max_iter")
@@ -310,16 +331,27 @@ function pathfind(
         n = DF.nrow(road_chain)
         road_chain_rows = collect(1:n)
         to_check = road_chain_rows[road_chain.not_checked]
+
+        # NOTE: in some cases, doing this every iteration regardless of whether
+        # a path has been found can also improve the speed of finding a
+        # good path, but in other cases, a path is not found even with
+        # a large number of iterations. Either way, it takes a little longer
+        # to find the first path, though that first one is usually better
+        # than paths at that iteration found when using this if-block.
         if path_found
+
             # once a path is found, use gathered info to pick other paths
             # to test: with this heuristic, the closer a road is and
             # the shorter its path thus far, the better the candidate
 
             road_chain_not_checked = road_chain[road_chain.not_checked, :]
-            possibly_shorter = approx_distance.(road_chain_not_checked.distance, road_chain_not_checked.path_length) .* (-road_chain_not_checked.score)
+            possibly_shorter = (
+                approx_distance.(road_chain_not_checked.distance, road_chain_not_checked.path_length)
+                .*
+                (-road_chain_not_checked.score) .^ 0.5
+            )
             possibly_shorter_order = sortperm(possibly_shorter, rev=true)
             to_check = to_check[possibly_shorter_order]
-
 
         end
 
