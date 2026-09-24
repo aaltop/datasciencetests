@@ -287,10 +287,12 @@ function pathfind(
     shortest_path_length = Inf64
     path_found = false
     exhausted = false
+    not_checked_cull_limit = 3000
     curr_iter = 0
     path_length_change = Tuple{Int,Float64}[]
     found_destination_intersection::Union{DF.DataFrame,Nothing} = nothing
     start_time = time()
+    road_chain_rows_main = collect(1:10_000)
     # 1. Find nearest road to starting point (above)
     # 2. Find intersections for that road
     # 3. Score the roads that those intersections are for: which
@@ -334,11 +336,20 @@ function pathfind(
             # could use subset!, but not sure if it's really better?
             # seems the recompilation time of the nameless function tends
             # to slow it down?
+            # println()
+            # println("$curr_iter before: $(DF.nrow(road_chain))")
             road_chain = road_chain[(road_chain.distance.+road_chain.path_length).<1.02*shortest_path_length, :]
+            # println("$curr_iter after: $(DF.nrow(road_chain))")
         end
 
         n = DF.nrow(road_chain)
-        road_chain_rows = collect(1:n)
+        lrcr = length(road_chain_rows_main)
+        if lrcr < n
+            # avoids having to re-allocate for the rows every time
+            append!(road_chain_rows_main, (lrcr+1):n)
+        end
+
+        road_chain_rows = @view road_chain_rows_main[1:n]
         to_check = road_chain_rows[road_chain.not_checked]
 
         # NOTE: in some cases, doing this every iteration regardless of whether
@@ -353,14 +364,25 @@ function pathfind(
             # to test: with this heuristic, the closer a road is and
             # the shorter its path thus far, the better the candidate
 
-            road_chain_not_checked = road_chain[road_chain.not_checked, :]
+            road_chain_not_checked = @view road_chain[road_chain.not_checked, :]
+            # TODO: probably often recalculating stuff that hasn't
+            # changed.
             possibly_shorter = (
                 approx_distance.(road_chain_not_checked.distance, road_chain_not_checked.path_length)
                 .*
                 (-road_chain_not_checked.score) .^ 0.5
             )
             possibly_shorter_order = sortperm(possibly_shorter, rev=true)
-            to_check = to_check[possibly_shorter_order]
+            to_check .= to_check[possibly_shorter_order]
+            if length(to_check) > not_checked_cull_limit
+                # to prevent there being a large number of values that
+                # go unchecked, just sitting in road_chain, cull some
+                # of the worst ones if the number gets too large. Meant
+                # naturally as a speedup, as it can deteriorate pathfinding
+                # performance.
+                remove_not_checked = to_check[1:floor(Int, length(to_check) * 0.1)]
+                sort!(remove_not_checked)
+            end
 
         end
 
@@ -379,7 +401,7 @@ function pathfind(
                 while length(reassign_parents) > 0
                     parent_intersection = pop!(reassign_parents)
 
-                    reassign_children_row = road_chain_rows[road_chain.parent_id.==parent_intersection.id]
+                    reassign_children_row = @view road_chain_rows[road_chain.parent_id.==parent_intersection.id]
                     for row_num in reassign_children_row
                         row = road_chain[row_num, :]
 
@@ -548,6 +570,10 @@ function pathfind(
             push!(path_length_change, (curr_iter, shortest_path_length))
         end
 
+        if length(to_check) > not_checked_cull_limit
+            deleteat!(road_chain, remove_not_checked)
+        end
+
         if return_fast && path_found
             break
         end
@@ -598,6 +624,7 @@ function get_path(pathfind_result::PathfindResult; sort_by::Union{Function,Nothi
     end
 
     paths, destination_id = pathfind_result.path, pathfind_result.destination_id
+    paths = paths[.!paths.not_checked, :]
     paths = hcat(paths[:, DF.Not(:intersection_id)], DF.DataFrame([:intersection_id => 1:DF.nrow(paths)]))
 
     # get the length and score first
