@@ -43,27 +43,58 @@ function score(start::DF.DataFrameRow, destination::DF.DataFrameRow, prev_road::
 
     # use logarithm?
     _score = L ./ S
+
+    _score_positive_mask = _score .> 0
+    _score_negative_mask = .!_score_positive_mask
+    # flip around the negative values. L/S closer to -1 is worse, so
+    # should use the below to flip it correctly.
+    _score[_score_negative_mask] .= (minimum(_score[_score_negative_mask], init=-1.0) - 1) .- _score[_score_negative_mask]
+
     # limit the score a little. L/S >= 1000 is already a massive
     # difference, so fair enough to limit, arguably.
     _score = ifelse.(abs.(_score) .> 1e3, sign.(_score) * 1e3, _score)
-    _score_positive_mask = _score .> 0
+
+    similarity_mult = score_cosine_similarity(start, destination, prev_road, candidate_roads)
+    # cosine_similarity is -1 <= x <= 1, transform so 1 becomes 0 and -1 becomes 2
+    # multiply the score, leading to high similarity directions being emphasised
+    # more
+    similarity_mult .= (abs.(similarity_mult .- 1)) .^ 0.5
+
+    # TODO: might be able to incorporate some of these calculations
+    # directly, so no need to calculate all this separately, which could
+    # save computation?
+    # multiplier for how much closer the path gets (encoding the value of S)
+    approach_mult = S ./ maximum(S, init=1.0)
+    # multiplying by this is the roughly the same as
+    # (k*S/S_max + 1.0)*(L/S)
+    # (k*L/S_max + *L/S)
+    # where for S = S_max,
+    # (L/S_max)*(k + 1)
+    # and S = S_min = j*S_max where j <= 1,
+    # (L/S_max)*(k + j) <= L/S_max.
+    #
+    # emphasis on S depends on k < 0, here -0.25: larger absolute value
+    # means higher emphasis. The use of the constant term 1.0 causes
+    # a separation around S = 0: when S = 0, the multiplier is 1.0.
+    # When S < 0, The multiplier is greater than 1.0, causing the negative
+    # score to move further away from zero; when, S > 0, the negative score
+    # moves closer to zero.
+    approach_mult .= -0.25 .* approach_mult .+ 1.0
+
+    _score .= approach_mult .* _score .* similarity_mult
     # ensure that negative scores are all lower than positive ones,
     # and that positive but large scores are lower than positive but
     # small scores:
-    # 
+
     # max(neg) - max(pos) < -max(pos) for x > 0 because global max(neg) == -1,
     # so max(neg) < -max(pos) + max(pos) == 0, which is identically true.
     # Further, min(neg) <= max(neg), and -max(pos) <= -min(pos).
     # (neg = negative scores, pos = positive scores)
-    _score[_score.<0] .-= maximum(_score[_score_positive_mask], init=1.0)
+    _score[_score_negative_mask] .-= maximum(_score[_score_positive_mask], init=1.0)
     _score[_score_positive_mask] .*= -1
 
-    mult = score_cosine_similarity(start, destination, prev_road, candidate_roads)
 
-    # cosine_similarity is -1 <= x <= 1, transform so 1 becomes 0 and -1 becomes 2
-    # multiply the score, leading to high similarity directions being emphasised
-    # more
-    return _score .* (abs.(mult .- 1)) .^ 0.5
+    return _score
 end
 
 function score_intersection_distance(start::DF.DataFrameRow, destination::DF.DataFrameRow, prev_road::DF.DataFrame, candidate_roads::DF.DataFrame)
