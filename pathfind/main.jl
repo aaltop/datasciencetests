@@ -11,7 +11,8 @@ using EnumX
 
 include("src/data.jl")
 include("src/geom.jl")
-include("src/scoring.jl")
+includet("src/scoring.jl")
+includet("src/ml.jl")
 include("src/linalg.jl")
 
 const TURKU_ID = Int32(40294758)
@@ -129,7 +130,15 @@ function plot_path_length_improvements!(ax::Axis, start, destination, names::Tup
     remove_legends!(ax.parent)
     max_length = round(maximum(improvements.length), digits=2)
     min_length = round(minimum(improvements.length), digits=2)
-    ax.title = "$(names[1]) -> $(names[2]), max_iter = $max_iter, max_seconds = $max_seconds\nmax $max_length min $min_length\n$info"
+    # ensure that AuCs are more comparable: have the entire width of iterations
+    # by adding a length at zero (technically should check whether the first
+    # iteration already is in the table, but highly unlikely to be the case.
+    # Also, the first iter would technically be 1, but for the width, use 0)
+    auc = metrics.area_under_curve(vcat([0], improvements.iter), vcat([improvements.length[1]], improvements.length), normalize=false)
+    auc = round(auc, digits=5)
+    title = "$(names[1]) -> $(names[2]), max_iter = $max_iter, max_seconds = $max_seconds\nmax $max_length min $min_length AuC $auc\n$info"
+    println(title)
+    ax.title = title
     lines!(ax, improvements.iter, improvements.length)
     autolimits!(ax)
     xlims!(ax, [-10, max_iter + 10])
@@ -544,6 +553,7 @@ function pathfind(
         end
 
     end
+    println()
     return PathfindResult((;
         path=road_chain,
         destination_id=destination_intersection.OBJECTID,
