@@ -154,7 +154,7 @@ function plot_path_length_improvements!(ax::Axis, start, destination, names::Tup
         while true
             i += 1
             idx = lpad("$i", 4, "0")
-            filename = "output/path_performance_$(names[1])_$(names[2])$(idx).png"
+            filename = "output/path_performance/$(names[1])_$(names[2])$(idx).png"
             if Base.Filesystem.ispath(filename)
                 continue
             end
@@ -165,7 +165,39 @@ function plot_path_length_improvements!(ax::Axis, start, destination, names::Tup
     end
 end
 
-const PathfindResult = @NamedTuple{path::DF.DataFrame, destination_id::Int32, found::Bool, improvements::Vector{Tuple{Int,Float64}}}
+const PathfindResult = @NamedTuple{path::DF.DataFrame, destination_id::Int32, found::Bool, improvements::Vector{Tuple{Int,Float64,PathInfo}}}
+
+function make_route_improvements_animation!(ax::Axis, pathfind_result::PathfindResult, from::String, to::String)
+
+    i = 0
+    filename = ""
+    file_prefix = "$(from)_$(to)"
+    while true
+        i += 1
+        idx = lpad("$i", 4, "0")
+        filename = "output/animations/$(file_prefix)_$idx.mp4"
+        if ispath(filename)
+            continue
+        end
+        break
+    end
+
+    old_titlesize = ax.titlesize
+    record(ax.parent, filename, framerate=2) do io
+        for i in 1:length(pathfind_result.improvements)
+            _plot(ax, options=[])
+            hidedecorations!(ax)
+            improvement = pathfind_result.improvements[i]
+            _plot_route!(ax, improvement[end], "route at iteration $(improvement[1])")
+            ax.title = L"%$from $\rightarrow$ %$to"
+            ax.titlesize = 20.0f0
+            recordframe!(io)
+        end
+    end
+
+    ax.titlesize = old_titlesize
+end
+
 
 """
 Find a path between `start` and `destination`. These should be rows as
@@ -289,7 +321,7 @@ function pathfind(
     exhausted = false
     not_checked_cull_limit = 3000
     curr_iter = 0
-    path_length_change = Tuple{Int,Float64}[]
+    path_length_change = Tuple{Int,Float64,PathInfo}[]
     found_destination_intersection::Union{DF.DataFrame,Nothing} = nothing
     start_time = time()
     road_chain_rows_main = collect(1:10_000)
@@ -414,7 +446,15 @@ function pathfind(
                             row.path_score = parent_intersection.path_score + row.score
                             if row.id == destination_intersection.OBJECTID
                                 shortest_path_length = min(shortest_path_length, row.path_length)
-                                push!(path_length_change, (curr_iter, shortest_path_length))
+
+                                path = get_path(
+                                    _PathfindResult((;
+                                        path=road_chain,
+                                        destination_id=destination_intersection.OBJECTID,
+                                        found=true,
+                                    ))
+                                )
+                                push!(path_length_change, (curr_iter, shortest_path_length, path))
                             end
 
                             # this child intersection has already been checked,
@@ -567,7 +607,14 @@ function pathfind(
             path_found = true
 
             shortest_path_length = min(shortest_path_length, road_chain[destination_loc, :path_length]...)
-            push!(path_length_change, (curr_iter, shortest_path_length))
+            path = get_path(
+                _PathfindResult((;
+                    path=road_chain,
+                    destination_id=destination_intersection.OBJECTID,
+                    found=true,
+                ))
+            )
+            push!(path_length_change, (curr_iter, shortest_path_length, path))
         end
 
         if length(to_check) > not_checked_cull_limit
@@ -580,14 +627,23 @@ function pathfind(
 
     end
     println()
+
+    path = get_path(
+        _PathfindResult((;
+            path=road_chain,
+            destination_id=destination_intersection.OBJECTID,
+            found=true,
+        ))
+    )
     return PathfindResult((;
         path=road_chain,
         destination_id=destination_intersection.OBJECTID,
         found=path_found,
-        improvements=unique(x -> x[1], sort(push!(path_length_change, (curr_iter, shortest_path_length))))
+        improvements=unique(x -> x[1], sort(push!(path_length_change, (curr_iter, shortest_path_length, path))))
     ))
 end
 
+const _PathfindResult = @NamedTuple{path::DF.DataFrame, destination_id::Int32, found::Bool}
 """
 Get the paths (sequences of road IDs) from `pathfind_result` if a path
 was found.
@@ -612,7 +668,7 @@ get_path(result, sort_by = x -> sortperm(x [DF.order(:path_score, rev=true)]))
 ```
 
 """
-function get_path(pathfind_result::PathfindResult; sort_by::Union{Function,Nothing}=nothing)::PathInfo
+function get_path(pathfind_result::_PathfindResult; sort_by::Union{Function,Nothing}=nothing)::PathInfo
 
     not_found_result = PathInfo((; path=Int[], length=NaN64, score=NaN64))
     if !pathfind_result.found
@@ -631,10 +687,10 @@ function get_path(pathfind_result::PathfindResult; sort_by::Union{Function,Nothi
     next_roads = paths[paths.id.==destination_id, :]
     next_roads = next_roads[sort_by(next_roads), :]
     length, score = next_roads[1, :path_length], next_roads[1, :path_score]
-    added_intersections = Set()
-    path_road_ids = [destination_id]
+    added_intersections = Set{Int}()
+    path_road_ids = Int[destination_id]
 
-    # TODO: find all possible paths
+    # TODO: find `n` best paths?
     while true
 
         next_roads = paths[paths.id.==path_road_ids[end], :]
@@ -651,7 +707,11 @@ function get_path(pathfind_result::PathfindResult; sort_by::Union{Function,Nothi
         end
 
         if next_id == -1
-            return not_found_result
+            # could not find a suitable next intersection, go back
+            # the current intersection is still in added_intersections,
+            # so will not be considered again.
+            pop!(path_road_ids)
+            continue
         end
 
         if isnothing(next_id)
