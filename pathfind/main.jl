@@ -39,8 +39,9 @@ function plot_route!(
     end
     remove_legends!(ax.parent)
     for (func_name, func) in score
-
-        route_info = get_path(pathfind(start, destination; score=func, pathfind_kwargs...); get_path_kwargs...)
+        p = PathfindState(start, destination, func)
+        pathfind(p; pathfind_kwargs...)
+        route_info = get_path(p.result; get_path_kwargs...)
         if length(score) == 1
             _plot_route!(ax, route_info, func_name; color_segments=true, plot_kwargs...)
         else
@@ -123,9 +124,15 @@ function plot_path_length_improvements!(ax::Axis, start, destination, names::Tup
 
     max_iter = get(pathfind_kwargs, :max_iter, 10_000)
     max_seconds = get(pathfind_kwargs, :max_seconds, Inf)
+    score = get(pathfind_kwargs, :score, scoring.score)
 
-    result = pathfind(start, destination; pathfind_kwargs...)
-    improvements = DF.DataFrame(result.improvements, [:iter, :length])
+    p = PathfindState(start, destination, score)
+
+    pathfind(p; pathfind_kwargs...)
+    improvements = DF.DataFrame(p.result.improvements)
+    # p.result.improvements could (and does) have more stuff than needed,
+    # so use select to just take the wanted stuff
+    improvements = DF.select(improvements, 1 => :iter, 2 => :length)
     empty!(ax)
     remove_legends!(ax.parent)
     max_length = round(maximum(improvements.length), digits=2)
@@ -165,9 +172,64 @@ function plot_path_length_improvements!(ax::Axis, start, destination, names::Tup
     end
 end
 
-const PathfindResult = @NamedTuple{path::DF.DataFrame, destination_id::Int32, found::Bool, improvements::Vector{Tuple{Int,Float64,PathInfo}}}
 
-function make_route_improvements_animation!(ax::Axis, pathfind_result::PathfindResult, from::String, to::String)
+mutable struct PathfindResult
+    path::DF.DataFrame
+    found::Bool
+    improvements::Vector{Tuple{Int,Float64,PathInfo}}
+
+
+    PathfindResult() = begin
+        path = DF.DataFrame(
+            id=Int[],
+            parent_id=Union{Int,Nothing}[],
+            # the score for this road segment
+            score=Float64[],
+            # the sum of the scores on the path up to this road segment
+            path_score=Float64[],
+            # at each point, the remaining distance to the destination
+            distance=Float64[],
+            # total length of the path up to this point
+            path_length=Float64[],
+            # intersection from which this road is entered
+            intersection=GI.Point[],
+            intersection_id=Union{Int,Nothing}[],
+            not_checked=Bool[]
+        )
+
+        new(path, false, Tuple{Int,Float64,PathInfo}[])
+    end
+end
+
+"""
+`start` and `destination` should be rows as
+returned by [`search_places`](@ref).
+"""
+mutable struct PathfindState
+    const start::DF.DataFrameRow
+    const destination::DF.DataFrameRow
+    const scoring_function::Function
+
+    result::Union{PathfindResult,Nothing}
+
+    PathfindState(
+        start::DF.DataFrameRow,
+        destination::DF.DataFrameRow,
+        scoring_function::Function
+    ) = new(start, destination, scoring_function, nothing)
+end
+
+PathfindState(start::DF.DataFrameRow, destination::DF.DataFrameRow) = PathfindState(start, destination, scoring.score)
+
+function Base.show(io::IO, x::PathfindState)
+    initialised = !isnothing(x.result)
+    path_found = initialised && x.result.found
+    write(io, "PathfindState(initialised=$initialised, path_found=$path_found)")
+    return nothing
+end
+Base.show(x::PathfindState) = show(stdout, x)
+
+function make_route_improvements_animation!(ax::Axis, pathfind_state::PathfindState, from::String, to::String)
 
     i = 0
     filename = ""
@@ -182,20 +244,17 @@ function make_route_improvements_animation!(ax::Axis, pathfind_result::PathfindR
         break
     end
 
-    old_titlesize = ax.titlesize
     record(ax.parent, filename, framerate=2) do io
-        for i in 1:length(pathfind_result.improvements)
+        for i in 1:length(pathfind_state.result.improvements)
             _plot(ax, options=[])
             hidedecorations!(ax)
-            improvement = pathfind_result.improvements[i]
+            improvement = pathfind_state.result.improvements[i]
             _plot_route!(ax, improvement[end], "route at iteration $(improvement[1])")
             ax.title = L"%$from $\rightarrow$ %$to"
-            ax.titlesize = 20.0f0
             recordframe!(io)
         end
     end
 
-    ax.titlesize = old_titlesize
 end
 
 
@@ -206,30 +265,11 @@ returned by [`search_places`](@ref).
 See also: [`get_path`](@ref).
 """
 function pathfind(
-    start::DF.DataFrameRow,
-    destination::DF.DataFrameRow;
-    score::Function=scoring.score,
+    obj::PathfindState;
     max_iter::Union{Int,Nothing}=nothing,
     max_seconds::Float64=Inf,
     return_fast::Bool=false,
-)#::PathfindResult
-
-    road_chain = DF.DataFrame(
-        id=Int[],
-        parent_id=Union{Int,Nothing}[],
-        # the score for this road segment
-        score=Float64[],
-        # the sum of the scores on the path up to this road segment
-        path_score=Float64[],
-        # at each point, the remaining distance to the destination
-        distance=Float64[],
-        # total length of the path up to this point
-        path_length=Float64[],
-        # intersection from which this road is entered
-        intersection=GI.Point[],
-        intersection_id=Union{Int,Nothing}[],
-        not_checked=Bool[]
-    )
+)
 
     """
     Calculate an approximate distance from the destination.
@@ -241,6 +281,12 @@ function pathfind(
     function path_length(current_path_length::Float64, current_intersection::GI.Point, next_intersection::GI.Point)
         return GO.distance(current_intersection, next_intersection) + current_path_length
     end
+
+    start = obj.start
+    destination = obj.destination
+    score = obj.scoring_function
+
+    obj.result = PathfindResult()
 
     # Using just the closest road to our start point, because ensuring
     # that the path actually makes it back to the road closest to the
@@ -254,8 +300,8 @@ function pathfind(
     start_roads.score = [0]
 
     starting_distance = GO.distance(start_roads.geometry, destination.geometry)
-    road_chain = vcat(
-        road_chain,
+    obj.result.path = vcat(
+        obj.result.path,
         DF.DataFrame([
             :id => start_roads.OBJECTID,
             :parent_id => nothing,
@@ -315,13 +361,12 @@ function pathfind(
         max_iter = 1000
     end
 
-    current_road = road_chain[end, :]
+    current_road = obj.result.path[end, :]
     shortest_path_length = Inf64
-    path_found = false
+    obj.result.found = false
     exhausted = false
     not_checked_cull_limit = 3000
     curr_iter = 0
-    path_length_change = Tuple{Int,Float64,PathInfo}[]
     found_destination_intersection::Union{DF.DataFrame,Nothing} = nothing
     start_time = time()
     road_chain_rows_main = collect(1:10_000)
@@ -354,7 +399,7 @@ function pathfind(
         # -------------------------------------------
 
 
-        if path_found && (curr_iter % 100 == 0) && (DF.nrow(road_chain) > 3000)
+        if obj.result.found && (curr_iter % 100 == 0) && (DF.nrow(obj.result.path) > 3000)
             # Remove path points from chosen intersections if they appear to
             # be worse than the shortest found path. Main intention is to
             # improve performance for larger iteration counts, as without
@@ -370,11 +415,11 @@ function pathfind(
             # to slow it down?
             # println()
             # println("$curr_iter before: $(DF.nrow(road_chain))")
-            road_chain = road_chain[(road_chain.distance.+road_chain.path_length).<1.02*shortest_path_length, :]
+            obj.result.path = obj.result.path[(obj.result.path.distance.+obj.result.path.path_length).<1.02*shortest_path_length, :]
             # println("$curr_iter after: $(DF.nrow(road_chain))")
         end
 
-        n = DF.nrow(road_chain)
+        n = DF.nrow(obj.result.path)
         lrcr = length(road_chain_rows_main)
         if lrcr < n
             # avoids having to re-allocate for the rows every time
@@ -382,7 +427,7 @@ function pathfind(
         end
 
         road_chain_rows = @view road_chain_rows_main[1:n]
-        to_check = road_chain_rows[road_chain.not_checked]
+        to_check = road_chain_rows[obj.result.path.not_checked]
 
         # NOTE: in some cases, doing this every iteration regardless of whether
         # a path has been found can also improve the speed of finding a
@@ -390,13 +435,13 @@ function pathfind(
         # a large number of iterations. Either way, it takes a little longer
         # to find the first path, though that first one is usually better
         # than paths at that iteration found when using this if-block.
-        if path_found
+        if obj.result.found
 
             # once a path is found, use gathered info to pick other paths
             # to test: with this heuristic, the closer a road is and
             # the shorter its path thus far, the better the candidate
 
-            road_chain_not_checked = @view road_chain[road_chain.not_checked, :]
+            road_chain_not_checked = @view obj.result.path[obj.result.path.not_checked, :]
             # TODO: probably often recalculating stuff that hasn't
             # changed.
             possibly_shorter = (
@@ -420,22 +465,22 @@ function pathfind(
 
         for i in length(to_check):-1:1
             exhausted = i == i
-            current_road = road_chain[to_check[i], :]
+            current_road = obj.result.path[to_check[i], :]
             # This road's children have already been checked, but with
             # the road itself having a different parent during that previous
             # check. Therefore, the path leading up to this road would
             # be different in this case, and its childrens' path lengths
             # and scores might need to be reassigned, so do that.
-            if current_road.id in road_chain.parent_id
+            if current_road.id in obj.result.path.parent_id
 
                 reassigned_ids = Set{Int}(current_road.intersection_id)
                 reassign_parents = DF.DataFrameRow[current_road]
                 while length(reassign_parents) > 0
                     parent_intersection = pop!(reassign_parents)
 
-                    reassign_children_row = @view road_chain_rows[road_chain.parent_id.==parent_intersection.id]
+                    reassign_children_row = @view road_chain_rows[obj.result.path.parent_id.==parent_intersection.id]
                     for row_num in reassign_children_row
-                        row = road_chain[row_num, :]
+                        row = obj.result.path[row_num, :]
 
                         # assign the shorter path length, and with
                         # it the corresponding path score 
@@ -447,14 +492,7 @@ function pathfind(
                             if row.id == destination_intersection.OBJECTID
                                 shortest_path_length = min(shortest_path_length, row.path_length)
 
-                                path = get_path(
-                                    _PathfindResult((;
-                                        path=road_chain,
-                                        destination_id=destination_intersection.OBJECTID,
-                                        found=true,
-                                    ))
-                                )
-                                push!(path_length_change, (curr_iter, shortest_path_length, path))
+                                push!(obj.result.improvements, (curr_iter, shortest_path_length, get_path(obj.result)))
                             end
 
                             # this child intersection has already been checked,
@@ -589,7 +627,7 @@ function pathfind(
         # highest score at the end
         DF.sort!(current_intersecting, :score)
 
-        append!(road_chain, DF.DataFrame([
+        append!(obj.result.path, DF.DataFrame([
             :id => current_intersecting.OBJECTID,
             :parent_id => current_road.id,
             :score => current_intersecting.score,
@@ -602,48 +640,30 @@ function pathfind(
         ]))
 
         if destination_intersection.OBJECTID in current_intersecting.OBJECTID
-            destination_loc = (road_chain.id .== destination_intersection.OBJECTID)
-            road_chain[destination_loc, :not_checked] .= false
-            path_found = true
+            destination_loc = obj.result.path.id .== destination_intersection.OBJECTID
+            obj.result.path[destination_loc, :not_checked] .= false
+            obj.result.found = true
 
-            shortest_path_length = min(shortest_path_length, road_chain[destination_loc, :path_length]...)
-            path = get_path(
-                _PathfindResult((;
-                    path=road_chain,
-                    destination_id=destination_intersection.OBJECTID,
-                    found=true,
-                ))
-            )
-            push!(path_length_change, (curr_iter, shortest_path_length, path))
+            shortest_path_length = min(shortest_path_length, obj.result.path[destination_loc, :path_length]...)
+            push!(obj.result.improvements, (curr_iter, shortest_path_length, get_path(obj.result)))
         end
 
         if length(to_check) > not_checked_cull_limit
-            deleteat!(road_chain, remove_not_checked)
+            deleteat!(obj.result.path, remove_not_checked)
         end
 
-        if return_fast && path_found
+        if return_fast && obj.result.found
             break
         end
 
     end
     println()
 
-    path = get_path(
-        _PathfindResult((;
-            path=road_chain,
-            destination_id=destination_intersection.OBJECTID,
-            found=true,
-        ))
-    )
-    return PathfindResult((;
-        path=road_chain,
-        destination_id=destination_intersection.OBJECTID,
-        found=path_found,
-        improvements=unique(x -> x[1], sort(push!(path_length_change, (curr_iter, shortest_path_length, path))))
-    ))
+
+    unique!(x -> x[1], sort!(push!(obj.result.improvements, (curr_iter, shortest_path_length, get_path(obj.result)))))
+    return obj
 end
 
-const _PathfindResult = @NamedTuple{path::DF.DataFrame, destination_id::Int32, found::Bool}
 """
 Get the paths (sequences of road IDs) from `pathfind_result` if a path
 was found.
@@ -668,7 +688,7 @@ get_path(result, sort_by = x -> sortperm(x [DF.order(:path_score, rev=true)]))
 ```
 
 """
-function get_path(pathfind_result::_PathfindResult; sort_by::Union{Function,Nothing}=nothing)::PathInfo
+function get_path(pathfind_result::PathfindResult; sort_by::Union{Function,Nothing}=nothing)::PathInfo
 
     not_found_result = PathInfo((; path=Int[], length=NaN64, score=NaN64))
     if !pathfind_result.found
@@ -679,9 +699,12 @@ function get_path(pathfind_result::_PathfindResult; sort_by::Union{Function,Noth
         sort_by = x -> sortperm(x, [:path_length, DF.order(:path_score, rev=true)])
     end
 
-    paths, destination_id = pathfind_result.path, pathfind_result.destination_id
+    paths = pathfind_result.path
     paths = paths[.!paths.not_checked, :]
     paths = hcat(paths[:, DF.Not(:intersection_id)], DF.DataFrame([:intersection_id => 1:DF.nrow(paths)]))
+
+    # always zero currently
+    destination_id = 0
 
     # get the length and score first
     next_roads = paths[paths.id.==destination_id, :]
