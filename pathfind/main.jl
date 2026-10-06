@@ -247,6 +247,17 @@ function make_route_improvements_animation!(ax::Axis, pathfind_state::PathfindSt
     record(ax.parent, filename, framerate=2) do io
         for i in 1:length(pathfind_state.result.improvements)
             _plot(ax, options=[])
+            plot!(ax, pathfind_state.start.geometry, color=:cornflowerblue)
+            plot!(ax, pathfind_state.destination.geometry, color=:orange)
+            annotation!(
+                ax,
+                # screen space position relative to data positions (to right and up)
+                fill((100.0, 30.0), 2),
+                # doesn't allow GI.Point or points as vectors for whatever reason
+                Tuple.([pathfind_state.start.geometry.geom, pathfind_state.destination.geometry.geom]),
+                text=["Start", "Destination"],
+                textcolor=[:cornflowerblue, :orange]
+            )
             hidedecorations!(ax)
             improvement = pathfind_state.result.improvements[i]
             _plot_route!(ax, improvement[end], "route at iteration $(improvement[1])")
