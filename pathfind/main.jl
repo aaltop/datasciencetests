@@ -124,7 +124,7 @@ end
 mutable struct PathfindResult
     path::DF.DataFrame
     found::Bool
-    improvements::Vector{Tuple{Int,Float64,PathInfo}}
+    improvements::Vector{Tuple{Int,Float64,Float64,PathInfo}}
 
 
     PathfindResult() = begin
@@ -206,19 +206,20 @@ function plot_path_length_improvements!(ax::Axis, iter_and_length::Vector{Tuple{
     auc = metrics.area_under_curve(vcat([0], improvements.iter), vcat([improvements.length[1]], improvements.length), normalize=false)
     auc = round(auc, digits=5)
     title = "$(names[1]) -> $(names[2]), max_iter = $max_iter, max_seconds = $max_seconds\nmax $max_length min $min_length AuC $auc\n$info"
-    # println(title)
     ax.title = title
     lines!(ax, improvements.iter, improvements.length)
     autolimits!(ax)
     xlims!(ax, [-10, max_iter + 10])
     length_mean = mean(improvements.length)
     length_std = std(improvements.length)
+
     # limit the verticality, focusing on around the mean
     std_max = length_mean - 2 * length_std
     std_max = isnan(std_max) ? -Inf : std_max
     std_min = length_mean + 2 * length_std
     std_min = isnan(std_min) ? Inf : std_min
     ylims!(ax, [max(min_length * 0.9, std_max), min(max_length * 1.10, std_min)])
+
     vlines!(ax, collect(0:1000:max_iter), color=(:orange, 0.5))
 
     if save_figure
@@ -266,7 +267,7 @@ function make_route_improvements_animation!(pathfind_state::PathfindState, from:
 
     # to create an axis within an axis:
     temp_fig = Figure(size=(1920, 1080))
-    ax = Axis(temp_fig[1:3, 1:4])
+    ax = Axis(temp_fig[1:3, 1:4], titlesize=20.0f0)
     hidespines!(ax)
     hidedecorations!(ax)
     subax = Axis(temp_fig[1, 1])
@@ -306,7 +307,7 @@ function make_route_improvements_animation!(pathfind_state::PathfindState, from:
             )
             hidedecorations!(ax)
             improvement = improvements[i]
-            _plot_route!(ax, improvement[end], "route at iteration $(improvement[1])")
+            _plot_route!(ax, improvement[end], "route at iteration $(improvement[1]), $(round(improvement[3], digits=2)) seconds")
             ax.title = L"%$from $\rightarrow$ %$to"
             recordframe!(io)
         end
@@ -548,7 +549,7 @@ function pathfind(obj::PathfindState)
                             if row.id == destination_intersection.OBJECTID
                                 shortest_path_length = min(shortest_path_length, row.path_length)
 
-                                push!(obj.result.improvements, (curr_iter, shortest_path_length, get_path(obj.result)))
+                                push!(obj.result.improvements, (curr_iter, shortest_path_length, time() - start_time, get_path(obj.result)))
                             end
 
                             # this child intersection has already been checked,
@@ -701,7 +702,7 @@ function pathfind(obj::PathfindState)
             obj.result.found = true
 
             shortest_path_length = min(shortest_path_length, obj.result.path[destination_loc, :path_length]...)
-            push!(obj.result.improvements, (curr_iter, shortest_path_length, get_path(obj.result)))
+            push!(obj.result.improvements, (curr_iter, shortest_path_length, time() - start_time, get_path(obj.result)))
         end
 
         if length(to_check) > not_checked_cull_limit
@@ -716,7 +717,7 @@ function pathfind(obj::PathfindState)
     println()
 
 
-    unique!(x -> x[1], sort!(push!(obj.result.improvements, (curr_iter, shortest_path_length, get_path(obj.result)))))
+    unique!(x -> x[1], sort!(push!(obj.result.improvements, (curr_iter, shortest_path_length, time() - start_time, get_path(obj.result)))))
     return obj
 end
 
