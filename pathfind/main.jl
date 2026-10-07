@@ -39,8 +39,8 @@ function plot_route!(
     end
     remove_legends!(ax.parent)
     for (func_name, func) in score
-        p = PathfindState(start, destination, func)
-        pathfind(p; pathfind_kwargs...)
+        p = PathfindState(start, destination; pathfind_kwargs..., scoring_function=func)
+        pathfind(p)
         route_info = get_path(p.result; get_path_kwargs...)
         if length(score) == 1
             _plot_route!(ax, route_info, func_name; color_segments=true, plot_kwargs...)
@@ -92,7 +92,7 @@ function _plot_route!(ax::Axis, route_info::PathInfo, legend_name::String; nearb
         plot!(ax, route.geometry, label=label)
     end
 
-    axislegend()
+    axislegend(ax)
 
 end
 
@@ -118,58 +118,6 @@ function plot_comparison!(ax::Axis, start, destination; max_iter=500, max_second
         plot_kwargs=plot_kwargs
     )
 
-end
-
-function plot_path_length_improvements!(ax::Axis, start, destination, names::Tuple{String,String}, info::String; pathfind_kwargs=(;), save_figure::Bool=false)
-
-    max_iter = get(pathfind_kwargs, :max_iter, 10_000)
-    max_seconds = get(pathfind_kwargs, :max_seconds, Inf)
-    score = get(pathfind_kwargs, :score, scoring.score)
-
-    p = PathfindState(start, destination, score)
-
-    pathfind(p; pathfind_kwargs...)
-    improvements = DF.DataFrame(p.result.improvements)
-    # p.result.improvements could (and does) have more stuff than needed,
-    # so use select to just take the wanted stuff
-    improvements = DF.select(improvements, 1 => :iter, 2 => :length)
-    empty!(ax)
-    remove_legends!(ax.parent)
-    max_length = round(maximum(improvements.length), digits=2)
-    min_length = round(minimum(improvements.length), digits=2)
-    # ensure that AuCs are more comparable: have the entire width of iterations
-    # by adding a length at zero (technically should check whether the first
-    # iteration already is in the table, but highly unlikely to be the case.
-    # Also, the first iter would technically be 1, but for the width, use 0)
-    auc = metrics.area_under_curve(vcat([0], improvements.iter), vcat([improvements.length[1]], improvements.length), normalize=false)
-    auc = round(auc, digits=5)
-    title = "$(names[1]) -> $(names[2]), max_iter = $max_iter, max_seconds = $max_seconds\nmax $max_length min $min_length AuC $auc\n$info"
-    println(title)
-    ax.title = title
-    lines!(ax, improvements.iter, improvements.length)
-    autolimits!(ax)
-    xlims!(ax, [-10, max_iter + 10])
-    length_mean = mean(improvements.length)
-    length_std = std(improvements.length)
-    ylims!(ax, [max(min_length * 0.9, length_mean - 2 * length_std), min(max_length * 1.10, length_mean + 2 * length_std)])
-    vlines!(ax, collect(0:1000:max_iter), color=(:orange, 0.5))
-
-    if save_figure
-
-        i = 0
-        filename = ""
-        while true
-            i += 1
-            idx = lpad("$i", 4, "0")
-            filename = "output/path_performance/$(names[1])_$(names[2])$(idx).png"
-            if Base.Filesystem.ispath(filename)
-                continue
-            end
-            break
-        end
-
-        save(filename, ax.parent)
-    end
 end
 
 
@@ -208,18 +156,23 @@ returned by [`search_places`](@ref).
 mutable struct PathfindState
     const start::DF.DataFrameRow
     const destination::DF.DataFrameRow
+
+    const max_iter::Int
+    const max_seconds::Float64
     const scoring_function::Function
+    const return_fast::Bool
 
     result::Union{PathfindResult,Nothing}
 
     PathfindState(
         start::DF.DataFrameRow,
-        destination::DF.DataFrameRow,
-        scoring_function::Function
-    ) = new(start, destination, scoring_function, nothing)
+        destination::DF.DataFrameRow;
+        max_iter::Int=1000,
+        max_seconds::Float64=Inf,
+        scoring_function::Function=scoring.score,
+        return_fast::Bool=false
+    ) = new(start, destination, max_iter, max_seconds, scoring_function, return_fast, nothing)
 end
-
-PathfindState(start::DF.DataFrameRow, destination::DF.DataFrameRow) = PathfindState(start, destination, scoring.score)
 
 function Base.show(io::IO, x::PathfindState)
     initialised = !isnothing(x.result)
@@ -229,7 +182,94 @@ function Base.show(io::IO, x::PathfindState)
 end
 Base.show(x::PathfindState) = show(stdout, x)
 
-function make_route_improvements_animation!(ax::Axis, pathfind_state::PathfindState, from::String, to::String)
+function kwargs(p::PathfindState)
+    return (; max_iter=p.max_iter, max_seconds=p.max_seconds, scoring_function=p.scoring_function, return_fast=p.return_fast)
+end
+
+"""
+Plot the length of the path as a function of iteration of the pathfind
+algorithm.
+"""
+function plot_path_length_improvements!(ax::Axis, iter_and_length::Vector{Tuple{Int,Float64}}, names::Tuple{String,String}, info::String; pathfind_kwargs=(;), save_figure::Bool=false)
+
+    max_iter = get(pathfind_kwargs, :max_iter, 1000)
+    max_seconds = get(pathfind_kwargs, :max_seconds, Inf)
+    improvements = DF.DataFrame(iter_and_length, [:iter, :length])
+    empty!(ax)
+    remove_legends!(ax.parent)
+    max_length = round(maximum(improvements.length), digits=2)
+    min_length = round(minimum(improvements.length), digits=2)
+    # ensure that AuCs are more comparable: have the entire width of iterations
+    # by adding a length at zero (technically should check whether the first
+    # iteration already is in the table, but highly unlikely to be the case.
+    # Also, the first iter would technically be 1, but for the width, use 0)
+    auc = metrics.area_under_curve(vcat([0], improvements.iter), vcat([improvements.length[1]], improvements.length), normalize=false)
+    auc = round(auc, digits=5)
+    title = "$(names[1]) -> $(names[2]), max_iter = $max_iter, max_seconds = $max_seconds\nmax $max_length min $min_length AuC $auc\n$info"
+    # println(title)
+    ax.title = title
+    lines!(ax, improvements.iter, improvements.length)
+    autolimits!(ax)
+    xlims!(ax, [-10, max_iter + 10])
+    length_mean = mean(improvements.length)
+    length_std = std(improvements.length)
+    # limit the verticality, focusing on around the mean
+    std_max = length_mean - 2 * length_std
+    std_max = isnan(std_max) ? -Inf : std_max
+    std_min = length_mean + 2 * length_std
+    std_min = isnan(std_min) ? Inf : std_min
+    ylims!(ax, [max(min_length * 0.9, std_max), min(max_length * 1.10, std_min)])
+    vlines!(ax, collect(0:1000:max_iter), color=(:orange, 0.5))
+
+    if save_figure
+
+        i = 0
+        filename = ""
+        while true
+            i += 1
+            idx = lpad("$i", 4, "0")
+            filename = "output/path_performance/$(names[1])_$(names[2])$(idx).png"
+            if Base.Filesystem.ispath(filename)
+                continue
+            end
+            break
+        end
+
+        save(filename, ax.parent)
+    end
+end
+
+function plot_path_length_improvements!(ax::Axis, p::PathfindState, names::Tuple{String,String}, info::String; save_figure::Bool=false)
+    return plot_path_length_improvements!(
+        ax,
+        getindex.(p.result.improvements, fill(1:2, length(p.result.improvements))),
+        names,
+        info,
+        pathfind_kwargs=kwargs(p),
+        save_figure=save_figure
+    )
+end
+
+function plot_path_length_improvements!(ax::Axis, start, destination, names::Tuple{String,String}, info::String; pathfind_kwargs=(;), save_figure::Bool=false)
+    p = PathfindState(start, destination; pathfind_kwargs...)
+    pathfind(p)
+    iter_and_length = getindex.(p.result.improvements, fill(1:2, length(p.result.improvements)))
+    plot_path_length_improvements!(ax, iter_and_length, names, info, pathfind_kwargs=pathfind_kwargs, save_figure=save_figure)
+end
+
+"""
+Create an animation showing the improvements in the path.
+"""
+function make_route_improvements_animation!(pathfind_state::PathfindState, from::String, to::String)
+
+    # TODO: add small figure inside showing length change (plot_path_length_improvements style)
+
+    # to create an axis within an axis:
+    temp_fig = Figure(size=(1920, 1080))
+    ax = Axis(temp_fig[1:3, 1:4])
+    hidespines!(ax)
+    hidedecorations!(ax)
+    subax = Axis(temp_fig[1, 1])
 
     i = 0
     filename = ""
@@ -244,8 +284,14 @@ function make_route_improvements_animation!(ax::Axis, pathfind_state::PathfindSt
         break
     end
 
-    record(ax.parent, filename, framerate=2) do io
-        for i in 1:length(pathfind_state.result.improvements)
+    improvements = pathfind_state.result.improvements
+    iter_and_length = getindex.(improvements, fill((1:2), length(improvements)))
+    record(temp_fig, filename, framerate=2) do io
+        for i in eachindex(improvements)
+            print("\r")
+            print("Improvement $i/$(length(improvements))")
+            plot_path_length_improvements!(subax, iter_and_length[1:i], (from, to), "", pathfind_kwargs=kwargs(pathfind_state))
+
             _plot(ax, options=[])
             plot!(ax, pathfind_state.start.geometry, color=:cornflowerblue)
             plot!(ax, pathfind_state.destination.geometry, color=:orange)
@@ -259,11 +305,12 @@ function make_route_improvements_animation!(ax::Axis, pathfind_state::PathfindSt
                 textcolor=[:cornflowerblue, :orange]
             )
             hidedecorations!(ax)
-            improvement = pathfind_state.result.improvements[i]
+            improvement = improvements[i]
             _plot_route!(ax, improvement[end], "route at iteration $(improvement[1])")
             ax.title = L"%$from $\rightarrow$ %$to"
             recordframe!(io)
         end
+        println()
     end
 
 end
@@ -275,12 +322,7 @@ returned by [`search_places`](@ref).
 
 See also: [`get_path`](@ref).
 """
-function pathfind(
-    obj::PathfindState;
-    max_iter::Union{Int,Nothing}=nothing,
-    max_seconds::Float64=Inf,
-    return_fast::Bool=false,
-)
+function pathfind(obj::PathfindState)
 
     """
     Calculate an approximate distance from the destination.
@@ -296,6 +338,9 @@ function pathfind(
     start = obj.start
     destination = obj.destination
     score = obj.scoring_function
+    max_iter = obj.max_iter
+    max_seconds = obj.max_seconds
+    return_fast = obj.return_fast
 
     obj.result = PathfindResult()
 
