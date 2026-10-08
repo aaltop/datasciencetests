@@ -326,9 +326,9 @@ See also: [`get_path`](@ref).
 function pathfind(obj::PathfindState)
 
     """
-    Calculate an approximate distance from the destination.
+    Calculate expected length of the path.
     """
-    function approx_distance(distance_from_destination::Float64, path_length::Float64)
+    function expected_length(distance_from_destination::Float64, path_length::Float64)
         return distance_from_destination * 2 + path_length
     end
 
@@ -366,6 +366,7 @@ function pathfind(obj::PathfindState)
             :path_score => start_roads.score,
             :distance => starting_distance,
             :path_length => GO.distance.([start.geometry], start_roads.geometry),
+            # use the start location as a pseudo-intersection
             :intersection => start.geometry,
             :intersection_id => nothing,
             :not_checked => true
@@ -408,7 +409,7 @@ function pathfind(obj::PathfindState)
 
     """
     Get rows indices for `rd_inter` where IDs in `id2s` match those of the
-    `id2` column in `rd_inter`.
+    `id2` column (intersection id) in `rd_inter`.
     """
     function get_id2_rows(id2s::Vector{Int})::Vector{Int}
         return vcat(get.([id2_rows], unique(id2s), [Int[]])...)
@@ -491,7 +492,8 @@ function pathfind(obj::PathfindState)
         # good path, but in other cases, a path is not found even with
         # a large number of iterations. Either way, it takes a little longer
         # to find the first path, though that first one is usually better
-        # than paths at that iteration found when using this if-block.
+        # than paths at that iteration found when using this if-block (as
+        # opposed to removing the if-clause but not the contents of the block).
         if obj.result.found
 
             # once a path is found, use gathered info to pick other paths
@@ -502,7 +504,7 @@ function pathfind(obj::PathfindState)
             # TODO: probably often recalculating stuff that hasn't
             # changed.
             possibly_shorter = (
-                approx_distance.(road_chain_not_checked.distance, road_chain_not_checked.path_length)
+                expected_length.(road_chain_not_checked.distance, road_chain_not_checked.path_length)
                 .*
                 (-road_chain_not_checked.score) .^ 0.5
             )
@@ -605,6 +607,13 @@ function pathfind(obj::PathfindState)
             found_destination_intersection = subset_by_id(current_intersecting, :OBJECTID => [destination_intersection.OBJECTID])[[1], :]
         end
 
+        # TODO: consider also this distance in choosing which road to take?
+        # Currently, only the current-to-next intersections are considered,
+        # but it's possible that the distance to one of these current intersections
+        # is quite far, while the score of some joining intersection of that
+        # intersection is very good. Basically, we're ignoring movement
+        # from the insertion intersection to these intersections, only
+        # considering the movement from these to the next_intersecting
         current_intersecting.distance = GO.distance.([current_road.intersection], current_intersecting.intersection)
         # find closest intersections for each intersecting road:
         # sort so that closest distances are highest, take
@@ -661,13 +670,10 @@ function pathfind(obj::PathfindState)
             next_intersecting
         )
 
+        # take the best score per each current_intersecting intersection
         best_scores = unique(DF.sort(next_intersecting, [:current_intersecting_row, DF.order(:score, rev=true)]), :id2)
-        # remove current_intersecting intersections that lost
-        # to another intersection (had only common intersections, but worse
-        # scores for those intersections)
+        # sort current_intersecting based on the score
         current_intersecting = current_intersecting[best_scores.current_intersecting_row, :]
-        # score based on the most optimal further connection for each immediate
-        # road connection
         current_intersecting.score = best_scores.score
 
         # the algorithm above might not allow the destination to
@@ -681,7 +687,7 @@ function pathfind(obj::PathfindState)
                 found_destination_intersection
             )
         end
-        # highest score at the end
+        # highest score at the end (redundant?)
         DF.sort!(current_intersecting, :score)
 
         append!(obj.result.path, DF.DataFrame([
