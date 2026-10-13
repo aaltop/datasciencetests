@@ -23,6 +23,8 @@
 !Manifest.toml
 !Project.toml
 
+!README.md
+
 !start_julia.sh
 
 # FILES
