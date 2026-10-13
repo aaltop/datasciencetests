@@ -58,6 +58,9 @@ end
 
 const PathInfo = @NamedTuple{path::Vector{Int}, length::Float64, score::Float64}
 
+"""
+Plot the route's roads.
+"""
 function _plot_route!(ax::Axis, route_info::PathInfo, legend_name::String; nearby_roads::Bool=false, color_segments::Bool=false)
 
     route = subset_by_id(roads(), :OBJECTID => route_info.path, order=:right)
@@ -263,14 +266,31 @@ Create an animation showing the improvements in the path.
 """
 function make_route_improvements_animation!(pathfind_state::PathfindState, from::String, to::String)
 
-    # TODO: add small figure inside showing length change (plot_path_length_improvements style)
-
     # to create an axis within an axis:
     temp_fig = Figure(size=(1920, 1080))
     ax = Axis(temp_fig[1:3, 1:4], titlesize=20.0f0)
     hidespines!(ax)
     hidedecorations!(ax)
-    subax = Axis(temp_fig[1, 1])
+    subax_length = Axis(
+        temp_fig[1, 1],
+        yticklabelcolor=:blue,
+        ylabelcolor=:blue,
+        ylabel="path length (m)",
+    )
+
+    # add algorithm execution time as function of iteration
+    subax_time = Axis(
+        temp_fig[1, 1],
+        yticklabelcolor=:green,
+        ylabelcolor=:green,
+        yaxisposition=:right,
+        ylabel="time (s)"
+    )
+    hidespines!(subax_time)
+    subax_time.xgridvisible = false
+    subax_time.ygridvisible = false
+    linkxaxes!(subax_length, subax_time)
+
 
     i = 0
     filename = ""
@@ -285,17 +305,23 @@ function make_route_improvements_animation!(pathfind_state::PathfindState, from:
         break
     end
 
-    improvements = pathfind_state.result.improvements
-    iter_and_length = getindex.(improvements, fill((1:2), length(improvements)))
+    improvements = DF.DataFrame(
+        pathfind_state.result.improvements,
+        [:iter, :length, :time, :path_info]
+    )
+    ylims!(subax_time, minimum(improvements.time) - 1, maximum(improvements.time) + 1)
+    iter_and_length = collect(zip(improvements.iter, improvements.length))
+    first_path = improvements[1, :]
     record(temp_fig, filename, framerate=2) do io
-        for i in eachindex(improvements)
+        for i in 1:DF.nrow(improvements)
             print("\r")
-            print("Improvement $i/$(length(improvements))")
-            plot_path_length_improvements!(subax, iter_and_length[1:i], (from, to), "", pathfind_kwargs=kwargs(pathfind_state))
+            print("Improvement $i/$(DF.nrow(improvements))")
+            plot_path_length_improvements!(subax_length, iter_and_length[1:i], (from, to), "", pathfind_kwargs=kwargs(pathfind_state))
+            lines!(subax_time, improvements.iter[1:i], improvements.time[1:i], color="#0F05")
 
             _plot(ax, options=[])
-            plot!(ax, pathfind_state.start.geometry, color=:cornflowerblue)
-            plot!(ax, pathfind_state.destination.geometry, color=:orange)
+            plot!(ax, pathfind_state.start.geometry, color=:green)
+            plot!(ax, pathfind_state.destination.geometry, color=:magenta)
             annotation!(
                 ax,
                 # screen space position relative to data positions (to right and up)
@@ -303,14 +329,36 @@ function make_route_improvements_animation!(pathfind_state::PathfindState, from:
                 # doesn't allow GI.Point or points as vectors for whatever reason
                 Tuple.([pathfind_state.start.geometry.geom, pathfind_state.destination.geometry.geom]),
                 text=["Start", "Destination"],
-                textcolor=[:cornflowerblue, :orange]
+                textcolor=[:green, :magenta]
             )
             hidedecorations!(ax)
-            improvement = improvements[i]
-            _plot_route!(ax, improvement[end], "route at iteration $(improvement[1]), $(round(improvement[3], digits=2)) seconds")
+            improvement = improvements[i, :]
+            _plot_route!(ax, improvement.path_info, "route at iteration $(improvement[1]), $(round(improvement[3], digits=2)) seconds, $(length(improvement.path_info.path)) road segments")
+
+            if i > 1
+                remove_legends!(ax.parent)
+                _plot_route!(ax, first_path.path_info, "first found path, $(round(first_path[3], digits=2)) seconds, $(length(first_path.path_info.path)) road segments")
+            end
+
             ax.title = L"%$from $\rightarrow$ %$to"
             recordframe!(io)
         end
+
+        for _ in 1:4
+            recordframe!(io)
+        end
+
+        mbc = GO.minimum_bounding_circle([pathfind_state.start.geometry, pathfind_state.destination.geometry])
+        radi = sqrt(mbc.radius_squared) .* 1.05
+        lims = [collect(mbc.center .- radi), collect(mbc.center .+ radi)]
+        lims = collect(zip(lims...))
+        xlims!(ax, lims[1])
+        ylims!(ax, lims[2])
+        # record a few frames at the end, zoomed in to the path
+        for _ in 1:4
+            recordframe!(io)
+        end
+
         println()
     end
 
@@ -1222,4 +1270,28 @@ end
 
 function remove_legends!(fig::Figure)
     foreach(delete!, filter(x -> isa(x, Legend), fig.content))
+end
+
+function make_animations(destinations::Vector{String}=["Kuusamo", "Inari"])
+
+    turku = search_places(ids=[TURKU_ID])[1, :]
+
+
+    destinations = Dict(dest => search_places(municipality=Regex(dest))[1, :] for dest in destinations)
+    push!(destinations, "Helsinki" => search_places(ids=[HELSINKI_ID])[1, :])
+
+
+    for destination in keys(destinations)
+        dest = destinations[destination]
+        println("Turku -> $destination...")
+        p = PathfindState(turku, dest, max_iter=10_000)
+        pathfind(p)
+        make_route_improvements_animation!(p, "Turku", destination)
+
+        println("$destination -> Turku...")
+        p = PathfindState(dest, turku, max_iter=10_000)
+        pathfind(p)
+        make_route_improvements_animation!(p, destination, "Turku")
+    end
+
 end
