@@ -1,0 +1,50 @@
+[project]
+name = "backend"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+  "fastapi>=0.143.1",
+  "sentence-transformers>=6.1.0",
+]
+
+[project.optional-dependencies]
+cpu = ["torch", "torchvision"]
+cuda = ["torch", "torchvision"]
+rocm = [
+  "torch==2.14.0",
+  "torchvision",
+]
+
+[tool.uv]
+conflicts = [[{ extra = "cuda" }, { extra = "rocm" }, { extra = "cpu" }]]
+
+[tool.uv.sources]
+idna = { index = "pypi" }
+torch = [
+  { index = "torch-rocm", extra = "rocm" },
+  { index = "torch-cuda", extra = "cuda" },
+  { index = "torch-cpu", extra = "cpu" },
+]
+torchvision = [
+  { index = "torch-rocm", extra = "rocm" },
+  { index = "torch-cuda", extra = "cuda" },
+  { index = "torch-cpu", extra = "cpu" },
+]
+
+[[tool.uv.index]]
+name = "torch-rocm"
+url = "https://download.pytorch.org/whl/rocm7.14"
+
+[[tool.uv.index]]
+name = "torch-cuda"
+url = "https://download.pytorch.org/whl/cu132"
+
+[[tool.uv.index]]
+name = "torch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"

@@ -1,0 +1,28 @@
+/*
+.*
+__pycache__
+
+# INCLUDE BACK
+# ------------
+
+# DIRECTORIES
+# ------------
+
+!src
+
+# DIRECTORIES
+# ============
+
+# FILES
+# ------------
+
+!.gitignore
+
+!pyproject.toml
+!uv.lock
+
+# FILES
+# ============
+
+# INCLUDE BACK
+# ============
