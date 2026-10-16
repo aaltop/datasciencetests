@@ -21,6 +21,8 @@ __pycache__
 !pyproject.toml
 !uv.lock
 
+!create_embeddings.py
+
 # FILES
 # ============
 
