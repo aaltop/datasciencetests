@@ -98,6 +98,11 @@ def encode(files: list[Path], name: str, model: SentenceTransformer):
     model_embed_dimension = model.get_embedding_dimension()
 
     files: list[TextFile] = [TextFile(f) for f in files]
+    # model does have get_max_seq_length, but didn't really seem
+    # like that was the actual length it truncates at. The output
+    # still seemed to change beyond that, though I suppose I don't
+    # know whether its a hard truncate. Anyway, use a bigger chunk size
+    # because of this.
     chunker = TextChunker(model_embed_dimension)
 
     encodings = []

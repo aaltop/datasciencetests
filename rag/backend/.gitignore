@@ -22,6 +22,7 @@ __pycache__
 !uv.lock
 
 !create_embeddings.py
+!query.py
 
 # FILES
 # ============
