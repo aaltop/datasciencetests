@@ -5,7 +5,7 @@ import torch
 
 import src.env
 
-from src.models import sentence_transformer
+from src.models import cross_encoder, sentence_transformer
 from src.filesystem import fs
 from src.gui import Search, TextLocation
 
@@ -14,7 +14,8 @@ class SemanticSearch(Search):
 
     def __init__(self):
 
-        self.model = sentence_transformer()
+        self.sentence_transformer = sentence_transformer()
+        self.cross_encoder = cross_encoder()
         # TODO: Move ID and embedding to separate table, keep only that actively
         # loaded, while looking up the IDs from another table for actual content? 
         self.df = (
@@ -23,11 +24,15 @@ class SemanticSearch(Search):
         self.encodings = self.df[:, "encoding"].to_torch()
 
     def submit_search(self, query: str) -> list[TextLocation]:
-        query_embed = torch.tensor(self.model.encode_query(query), dtype=torch.float64)
-        sim = self.model.similarity(query_embed, self.encodings)[0]
-        top = torch.topk(sim, k=10)
-        top_df = self.df[list(top.indices.tolist()), :]
-        top_df = top_df.with_columns(
+        query_embed = torch.tensor(self.sentence_transformer.encode_query(query), dtype=torch.float64)
+
+        sim = self.sentence_transformer.similarity(query_embed, self.encodings)[0]
+        top = torch.topk(sim, k=min(len(sim), 100)).indices
+        top_df = self.df[list(top.tolist()), :]
+
+        cross_encodings = self.cross_encoder.predict([(query, passage) for passage in top_df["text"]])
+
+        top_df = top_df[cross_encodings.argsort(descending=True)[:20], :].with_columns(
             # make filenames relative to the docs directory so they're not so
             # long
             pl.col("file").map_elements(lambda x: str(Path(x).relative_to(fs.text_data.absolute())), return_dtype=str),

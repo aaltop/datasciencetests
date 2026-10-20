@@ -45,7 +45,6 @@ class Search(abc.ABC):
         left_frm.grid_columnconfigure(0, weight=1)
         files_list = tk.Listbox(left_frm)
         files_list.grid(column=0, row=0, sticky="news", padx=10, pady=10)
-        files_list.insert("end")
 
         frm = ttk.Frame(root)
         frm.grid(column=1, row=0, sticky="news")
@@ -123,7 +122,10 @@ class Search(abc.ABC):
         _search_bar.bind("<Return>", submit_search)
 
         def select_file(*args):
-            selected_idx: int = files_list.curselection()[0]
+            selections = files_list.curselection()
+            if len(selections) < 1:
+                return
+            selected_idx: int = selections[0]
             if selected_idx < len(self.text_locations):
                 insert_highlight_text(self.text_locations[selected_idx])
 
