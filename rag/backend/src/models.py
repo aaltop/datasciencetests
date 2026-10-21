@@ -14,7 +14,7 @@ def sentence_transformer(
 ) -> SentenceTransformer:
 
     model = SentenceTransformer(
-        "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        "sentence-transformers/all-MiniLM-L6-v2",
         device=device,
         local_files_only=not download_model,
         similarity_fn_name="euclidean"

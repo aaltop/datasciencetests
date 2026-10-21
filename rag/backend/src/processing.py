@@ -103,7 +103,7 @@ def encode(files: list[Path], name: str, model: SentenceTransformer):
     # still seemed to change beyond that, though I suppose I don't
     # know whether its a hard truncate. Anyway, use a bigger chunk size
     # because of this.
-    chunker = TextChunker(model_embed_dimension)
+    chunker = TextChunker(200)
 
     encodings = []
     start_time = time.time()
@@ -125,6 +125,9 @@ def encode(files: list[Path], name: str, model: SentenceTransformer):
         printer.print(f"Chunks: {len(chunks)}")
 
         texts = ["".join(ch["text"] for ch in chunk) for chunk in chunks]
+        # TODO: could pass a set batch each time, should be faster,
+        # right now it might pass only a few chunks of text for very
+        # small files
         enc = model.encode_document(texts)
 
         rows = [(chunk[0]["row"], chunk[-1]["row"]) for chunk in chunks]
