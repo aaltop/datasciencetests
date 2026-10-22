@@ -1,16 +1,11 @@
-from pathlib import Path
+from collections import defaultdict
 import tkinter as tk
 import tkinter.ttk as ttk
 from tkinter.scrolledtext import ScrolledText
-from typing import TypedDict
 import abc
 
-class TextLocation(TypedDict):
-    file: str
-    start_row: int
-    end_row: int
-    text: str
-
+from src.processing import TextLocation
+from src.interval import groupby_union, ScoredGroupInterval
 
 class Search(abc.ABC):
 
@@ -110,11 +105,19 @@ class Search(abc.ABC):
         def submit_search(*args):
             search_query = search_content.get()
             response = self.submit_search(search_query)
+            groups = groupby_union(
+                [
+                    ScoredGroupInterval[int, str](score=-i, group=x["file"], interval=(x["start_row"], x["end_row"]))
+                    for i,x in enumerate(response)
+                ]
+            )
+            groups.sort(key = lambda x: x.score, reverse=True)
+            text_locations = [TextLocation(file=x.group, start_row=x.interval[0], end_row=x.interval[1]) for x in groups]
             files_list.delete(0, "end")
-            self.text_locations = response
-            files_list.insert("end", *(content["file"] for content in response))
-            if len(response) > 0:
-                insert_highlight_text(response[0])
+            self.text_locations = text_locations
+            files_list.insert("end", *(content["file"] for content in text_locations))
+            if len(text_locations) > 0:
+                insert_highlight_text(text_locations[0])
                 files_list.activate(0)
 
         _button.bind("<Return>", submit_search)

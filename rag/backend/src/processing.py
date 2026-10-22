@@ -3,6 +3,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import TypedDict
 import time
+import itertools
 
 import polars as pl
 from sentence_transformers import SentenceTransformer
@@ -14,6 +15,7 @@ from src.io import TerminalPrinter
 
 
 class FileContent(TypedDict):
+    '''Represents content on a single row and given columns in a "file".'''
     row: int
     cols: tuple[int, int]
     text: str
@@ -80,10 +82,13 @@ class TextChunker:
                 texts_length = 0
                 contents = []
 
-class Encoding(TypedDict):
+
+class TextLocation(TypedDict):
     file: str
     start_row: int
     end_row: int
+
+class Encoding(TextLocation):
     text: str
     encoding: list[float]
 
